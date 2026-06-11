@@ -435,7 +435,7 @@ function shinkansenSide(topColor, stripeColor) {
    the photo atlas is embedded below and applied to sides/roof/under/
    bogies; these canvases remain as the pre-load fallback and the nose
    loft skin (colours sampled from the atlas) */
-const E5_TEAL = '#1f9aa0', E5_PINK = '#dc5d9f', E5_WHITE = '#f0f3f5';
+const E5_TEAL = '#1ca2a6', E5_PINK = '#ff4fa3', E5_WHITE = '#f0f3f5';
 function e5Side() {
   return canvasTex(1024, 176, (g, w, h) => {
     // white lower body with soft shading
@@ -508,8 +508,68 @@ function noseTex({ top, stripe, bottom, bandBase, bandTip, topFill = true }) {
     }
   });
 }
-const e5NoseTex = noseTex({ top: E5_TEAL, stripe: E5_PINK, bottom: E5_WHITE, bandBase: 0.21, bandTip: 0.32 });
+const e5NoseTex = e5NoseDetail();
 const n700NoseTex = noseTex({ top: '#eef2f5', stripe: '#1565c0', bottom: '#eef2f5', bandBase: 0.2, bandTip: 0.26 });
+
+/* E5 nose skin following the provided UV sheet: metallic turquoise
+   crown with sheen, pink boundary line, white lower panels, grey
+   under-nose skirt, painted windshield with the 4-lamp cluster and
+   panel seams. u wraps the ring (0.5 = crown), v runs base→tip. */
+function e5NoseDetail() {
+  return canvasTex(512, 512, (g, w, h) => {
+    const bandBase = 0.21, bandTip = 0.32;
+    for (let row = 0; row < h; row++) {
+      const v = 1 - row / h;
+      const band = bandBase + (bandTip - bandBase) * v;
+      g.fillStyle = '#ffffff'; g.fillRect(0, row, w, 1);
+      g.fillStyle = '#d9dcdf';                       // under-nose skirt grey
+      g.fillRect(0, row, 0.075 * w, 1);
+      g.fillRect(w - 0.075 * w, row, 0.075 * w, 1);
+      g.fillStyle = E5_TEAL;
+      g.fillRect((0.5 - band) * w, row, band * 2 * w, 1);
+      g.fillStyle = E5_PINK;
+      g.fillRect((0.5 - band - 0.022) * w, row, 0.022 * w, 1);
+      g.fillRect((0.5 + band) * w, row, 0.022 * w, 1);
+    }
+    // metallic sheen along the crown
+    const sheen = g.createLinearGradient(0.28 * w, 0, 0.72 * w, 0);
+    sheen.addColorStop(0, 'rgba(0,34,36,.20)');
+    sheen.addColorStop(0.5, 'rgba(255,255,255,.16)');
+    sheen.addColorStop(1, 'rgba(0,34,36,.20)');
+    g.fillStyle = sheen; g.fillRect(0.27 * w, 0, 0.46 * w, h);
+    // panel seams: teal crown centreline + base ring + white lower panels
+    g.strokeStyle = 'rgba(6,44,46,.4)'; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(0.5 * w, 0); g.lineTo(0.5 * w, (1 - 0.46) * h); g.stroke();
+    g.beginPath(); g.moveTo(0.3 * w, (1 - 0.035) * h); g.lineTo(0.7 * w, (1 - 0.035) * h); g.stroke();
+    g.strokeStyle = 'rgba(125,134,142,.45)';
+    for (const u of [0.135, 0.865]) {
+      g.beginPath(); g.moveTo(u * w, 0); g.lineTo(u * w, h); g.stroke();
+    }
+    g.beginPath(); g.moveTo(0.075 * w, (1 - 0.5) * h); g.lineTo(0.27 * w, (1 - 0.5) * h); g.stroke();
+    g.beginPath(); g.moveTo(0.73 * w, (1 - 0.5) * h); g.lineTo(0.925 * w, (1 - 0.5) * h); g.stroke();
+    // windshield (#111418 glass per the sheet) — tapered toward the tip
+    const yTip = (1 - 0.45) * h, yBase = (1 - 0.17) * h;
+    g.fillStyle = '#0a0e12';
+    g.beginPath();
+    g.moveTo(0.445 * w, yTip);
+    g.lineTo(0.555 * w, yTip);
+    g.quadraticCurveTo(0.60 * w, yTip + (yBase - yTip) * 0.5, 0.578 * w, yBase);
+    g.quadraticCurveTo(0.5 * w, yBase + 14, 0.422 * w, yBase);
+    g.quadraticCurveTo(0.40 * w, yTip + (yBase - yTip) * 0.5, 0.445 * w, yTip);
+    g.fill();
+    g.strokeStyle = '#111418'; g.lineWidth = 7; g.stroke();
+    // glass reflection streak
+    g.fillStyle = 'rgba(150,205,215,.16)';
+    g.fillRect(0.45 * w, yTip + 14, 0.10 * w, 16);
+    // 4-lamp headlight cluster at the tip edge of the window
+    g.fillStyle = '#fff9e8';
+    for (let i = 0; i < 4; i++) {
+      g.beginPath();
+      g.arc((0.4665 + i * 0.0225) * w, yTip + 9, 5, 0, 7);
+      g.fill();
+    }
+  });
+}
 
 /* ================================================================
    E235 photo atlas regions (1672x941 sheet)
@@ -1316,7 +1376,7 @@ function buildTrain(typeKey) {
     if (isShink) {
       // sculpted duckbill nose lofted from the body silhouette
       const noseMat = new THREE.MeshStandardMaterial({
-        map: T.noseTex, roughness: 0.28, metalness: 0.12, side: THREE.DoubleSide });
+        map: T.noseTex, roughness: 0.22, metalness: 0.28, side: THREE.DoubleSide });
       const nose = new THREE.Mesh(getNoseGeo(T.noseLen), noseMat);
       nose.position.set(0, 0, sign * (CAR_LEN / 2 - 0.25));
       if (sign < 0) nose.rotation.y = Math.PI;
@@ -1361,7 +1421,8 @@ function buildTrain(typeKey) {
     for (const sx of [-0.3, 0.3]) {
       const m = new THREE.MeshBasicMaterial({ color: 0xfff6d8 });
       const l = new THREE.Mesh(lightGeo, m);
-      if (isShink) l.position.set(sx, 1.62, sign * (CAR_LEN / 2 + T.noseLen - 1.7));
+      if (T.e5Atlas) l.position.set(sx * 0.9, 3.42, sign * (CAR_LEN / 2 + T.noseLen * 0.44));
+      else if (isShink) l.position.set(sx, 1.62, sign * (CAR_LEN / 2 + T.noseLen - 1.7));
       else l.position.set(sx * 3.17, 1.2, sign * (CAR_LEN / 2 + 0.12));
       car.add(l);
       (sign > 0 ? lampsPlus : lampsMinus).push(m);
