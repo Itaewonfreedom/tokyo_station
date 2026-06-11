@@ -429,6 +429,85 @@ function shinkansenSide(topColor, stripeColor) {
   });
 }
 
+/* ---------- E5 Hayabusa livery, modelled on the provided atlas:
+   teal upper body, pink stripe, white lower, small windows in the
+   teal band, plug doors at the car ends ---------- */
+const E5_TEAL = '#2aa8a4', E5_PINK = '#e85298', E5_WHITE = '#f2f4f6';
+function e5Side() {
+  return canvasTex(1024, 176, (g, w, h) => {
+    // white lower body with soft shading
+    const grad = g.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, '#ffffff'); grad.addColorStop(.55, E5_WHITE); grad.addColorStop(1, '#d4d9dd');
+    g.fillStyle = grad; g.fillRect(0, 0, w, h);
+    // teal upper band with subtle vertical sheen
+    const tg = g.createLinearGradient(0, 0, 0, 64);
+    tg.addColorStop(0, '#1e8c89'); tg.addColorStop(.35, E5_TEAL); tg.addColorStop(1, '#35b5b0');
+    g.fillStyle = tg; g.fillRect(0, 0, w, 64);
+    // hayabusa pink stripe
+    g.fillStyle = E5_PINK; g.fillRect(0, 64, w, 11);
+    g.fillStyle = 'rgba(255,255,255,.35)'; g.fillRect(0, 64, w, 2);
+    // small rounded windows inside the teal band
+    g.fillStyle = '#0d1418';
+    for (let x = 92; x < w - 110; x += 62) {
+      g.beginPath();
+      if (g.roundRect) g.roundRect(x, 26, 26, 22, 6); else g.rect(x, 26, 26, 22);
+      g.fill();
+    }
+    // plug doors at both car ends (small dark window, outline)
+    for (const dx of [16, w - 60]) {
+      g.fillStyle = 'rgba(0,0,0,.18)'; g.fillRect(dx - 2, 8, 48, h - 36);
+      g.fillStyle = grad; g.fillRect(dx, 10, 44, h - 40);
+      g.fillStyle = tg; g.fillRect(dx, 10, 44, 54);
+      g.fillStyle = E5_PINK; g.fillRect(dx, 64, 44, 11);
+      g.fillStyle = '#0d1418'; g.fillRect(dx + 12, 26, 20, 24);
+    }
+    // panel seams + grilles on the lower body
+    g.fillStyle = 'rgba(90,100,108,.25)';
+    for (let x = 256; x < w; x += 256) g.fillRect(x, 4, 2, h - 24);
+    g.fillStyle = 'rgba(70,78,86,.5)';
+    for (let x = 130; x < w - 80; x += 230) g.fillRect(x, 122, 64, 16);
+    // dark underframe
+    g.fillStyle = '#23262a'; g.fillRect(0, h - 16, w, 16);
+  });
+}
+function e5Roof() {
+  return canvasTex(128, 512, (g, w, h) => {
+    g.fillStyle = '#23938f'; g.fillRect(0, 0, w, h);
+    const sh = g.createLinearGradient(0, 0, w, 0);
+    sh.addColorStop(0, 'rgba(0,0,0,.25)'); sh.addColorStop(.5, 'rgba(255,255,255,.12)');
+    sh.addColorStop(1, 'rgba(0,0,0,.25)');
+    g.fillStyle = sh; g.fillRect(0, 0, w, h);
+    g.fillStyle = 'rgba(10,40,40,.5)';
+    for (let y = 0; y < h; y += 64) g.fillRect(0, y, w, 2);
+    g.fillStyle = '#1a6f6c';
+    g.fillRect(w / 2 - 22, 150, 44, 60);   // vent grilles like the atlas roof
+    g.fillStyle = '#10504e';
+    for (let y = 156; y < 206; y += 8) g.fillRect(w / 2 - 18, y, 36, 3);
+  });
+}
+
+/* nose skin: u wraps the cross-section ring (0 = belly, 0.5 = top),
+   v runs base→tip. Painted per row so the colour band can widen
+   toward the tip like the real duckbill */
+function noseTex({ top, stripe, bottom, bandBase, bandTip, topFill = true }) {
+  return canvasTex(256, 256, (g, w, h) => {
+    for (let row = 0; row < h; row++) {
+      const v = 1 - row / h;                       // texture v of this row
+      const band = bandBase + (bandTip - bandBase) * v;
+      g.fillStyle = bottom; g.fillRect(0, row, w, 1);
+      if (topFill) {
+        g.fillStyle = top;
+        g.fillRect((0.5 - band) * w, row, band * 2 * w, 1);
+      }
+      g.fillStyle = stripe;
+      g.fillRect((0.5 - band - 0.024) * w, row, 0.024 * w, 1);
+      g.fillRect((0.5 + band) * w, row, 0.024 * w, 1);
+    }
+  });
+}
+const e5NoseTex = noseTex({ top: E5_TEAL, stripe: E5_PINK, bottom: E5_WHITE, bandBase: 0.17, bandTip: 0.3 });
+const n700NoseTex = noseTex({ top: '#eef2f5', stripe: '#1565c0', bottom: '#eef2f5', bandBase: 0.2, bandTip: 0.26 });
+
 /* ================================================================
    E235 photo atlas regions (1672x941 sheet)
 ================================================================ */
@@ -1016,6 +1095,52 @@ const roofEndShape = new THREE.Shape();
 }
 const roofEndGeo = new THREE.ShapeGeometry(roofEndShape);
 
+/* ---------- lofted duckbill nose (E5 / N700) ----------
+   cross-sections morph from the car-body silhouette at the joint to a
+   flat ellipse at the tip; built once per nose length and cached */
+const noseGeoCache = {};
+function getNoseGeo(len) {
+  if (noseGeoCache[len]) return noseGeoCache[len];
+  const segs = 26, ring = 26;
+  const pos = [], uvs = [], idx = [];
+  for (let i = 0; i <= segs; i++) {
+    const t = i / segs;
+    const w = CAR_W * (1 - 0.06 * t - 0.62 * Math.pow(t, 2.1));
+    const top = lerp(4.32, 1.32, Math.pow(t, 1.5));
+    const bot = lerp(0.55, 0.98, Math.pow(t, 2.4));
+    const cy = (top + bot) / 2, hh = Math.max(0.06, (top - bot) / 2);
+    for (let k = 0; k <= ring; k++) {
+      const a = k / ring;
+      const phi = a * Math.PI * 2 - Math.PI / 2;     // a=0 belly, a=0.5 roof
+      const cx = Math.cos(phi), sy = Math.sin(phi);
+      // superellipse squash → flatter sides and roof, like the real shell
+      const px = (w / 2) * Math.sign(cx) * Math.pow(Math.abs(cx), 0.72);
+      const py = cy + hh * Math.sign(sy) * Math.pow(Math.abs(sy), 0.82);
+      pos.push(px, py, t * len);
+      uvs.push(a, t);
+    }
+  }
+  for (let i = 0; i < segs; i++)
+    for (let k = 0; k < ring; k++) {
+      const a = i * (ring + 1) + k, b = a + ring + 1;
+      idx.push(a, a + 1, b, b, a + 1, b + 1);
+    }
+  // tip cap fan
+  const tip = pos.length / 3;
+  pos.push(0, (1.32 + 0.98) / 2, len + 0.04);
+  uvs.push(0.5, 1);
+  const last = segs * (ring + 1);
+  for (let k = 0; k < ring; k++) idx.push(last + k, last + k + 1, tip);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  noseGeoCache[len] = geo;
+  return geo;
+}
+const noseGlassMat = new THREE.MeshStandardMaterial({ color: 0x0c1116, roughness: 0.15, metalness: 0.55 });
+
 const yamanoteMats = {
   side1: null, side2: null, side1Open: null, side2Open: null,
   face: null, faceBack: null, under: null, bogie: null, roof: null, ac: null,
@@ -1042,12 +1167,14 @@ const trainTypes = {
   tokaido: {
     name: '도카이도 신칸센 N700',
     sideClosed: shinkansenSide(null, '#1565c0'), sideOpen: shinkansenSide(null, '#1565c0'),
-    face: null, nose: 0xf4f7fa, cars: 6, maxSpeed: 32, dwell: 16, shink: true,
+    face: null, noseLen: 9, noseTex: n700NoseTex, roofColor: 0xe8ecef,
+    cars: 6, maxSpeed: 32, dwell: 16, shink: true,
   },
   tohoku: {
-    name: '도호쿠 신칸센 E5',
-    sideClosed: shinkansenSide('#2e8b2e', '#e3669b'), sideOpen: shinkansenSide('#2e8b2e', '#e3669b'),
-    face: null, nose: 0x57b06b, cars: 6, maxSpeed: 32, dwell: 16, shink: true,
+    name: '도호쿠 신칸센 E5 하야부사',
+    sideClosed: e5Side(), sideOpen: e5Side(),
+    face: null, noseLen: 13, noseTex: e5NoseTex, roofTex: e5Roof(),
+    cars: 6, maxSpeed: 32, dwell: 16, shink: true,
   },
 };
 
@@ -1069,7 +1196,9 @@ function buildTrain(typeKey) {
     acMat = new THREE.MeshStandardMaterial({ map: yamanoteMats.ac, roughness: 0.6 });
   } else {
     sideMatA = sideMatB = new THREE.MeshStandardMaterial({ map: T.sideClosed, roughness: 0.45, metalness: 0.25 });
-    roofMat = roofCarMat;
+    if (T.roofTex) roofMat = new THREE.MeshStandardMaterial({ map: T.roofTex, roughness: 0.5 });
+    else if (T.roofColor) roofMat = new THREE.MeshStandardMaterial({ color: T.roofColor, roughness: 0.55 });
+    else roofMat = roofCarMat;
     acMat = roofCarMat;
   }
   const underMat = new THREE.MeshStandardMaterial({ map: yamanoteMats.under, roughness: 0.9 });
@@ -1137,6 +1266,24 @@ function buildTrain(typeKey) {
         car.add(gw);
       }
       if (i === 2 || i === 5) addPantograph(car, 3.2);
+    } else {
+      // full-width diaphragm between Shinkansen cars
+      if (i > 0) {
+        const gw = new THREE.Mesh(gangwayGeo, endMat);
+        gw.scale.set(1.6, 1.05, 1);
+        gw.position.set(0, 2.45, -CAR_LEN / 2 - 0.05);
+        markDetail(gw);
+        car.add(gw);
+      }
+      if (i === 3) {     // low-profile Shinkansen pantograph + side shields
+        addPantograph(car, 0);
+        for (const sx of [-1.35, 1.35]) {
+          const shield = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.7, 3.6), endMat);
+          shield.position.set(sx, 4.7, 0);
+          markDetail(shield);
+          car.add(shield);
+        }
+      }
     }
     group.add(car);
     cars.push(car);
@@ -1145,13 +1292,26 @@ function buildTrain(typeKey) {
   function addEnd(carIdx, sign) {
     const car = cars[carIdx];
     if (isShink) {
-      const noseMat = new THREE.MeshStandardMaterial({ color: T.nose, roughness: 0.3, metalness: 0.2 });
-      const nose = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 1.42, 7.5, 12), noseMat);
-      nose.rotation.x = sign * Math.PI / 2;
-      nose.scale.set(1, 1, 0.62);
-      nose.position.set(0, 2.25, sign * (CAR_LEN / 2 + 3.4));
+      // sculpted duckbill nose lofted from the body silhouette
+      const noseMat = new THREE.MeshStandardMaterial({
+        map: T.noseTex, roughness: 0.28, metalness: 0.12, side: THREE.DoubleSide });
+      const nose = new THREE.Mesh(getNoseGeo(T.noseLen), noseMat);
+      nose.position.set(0, 0, sign * (CAR_LEN / 2 - 0.25));
+      if (sign < 0) nose.rotation.y = Math.PI;
       nose.castShadow = true;
       car.add(nose);
+      // cockpit canopy
+      const ws = new THREE.Mesh(
+        new THREE.SphereGeometry(0.62, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2), noseGlassMat);
+      ws.scale.set(1.05, 0.62, 1.9);
+      ws.position.set(0, 3.7, sign * (CAR_LEN / 2 + T.noseLen * 0.3));
+      markDetail(ws);
+      car.add(ws);
+      // under-nose skirt
+      const skirtNose = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.5, 2.6), darkMat);
+      skirtNose.position.set(0, 0.62, sign * (CAR_LEN / 2 + T.noseLen * 0.3));
+      markDetail(skirtNose);
+      car.add(skirtNose);
     } else {
       const tex = T.atlas ? (sign > 0 ? yamanoteMats.face : yamanoteMats.faceBack) : T.face;
       const f = new THREE.Mesh(
@@ -1175,11 +1335,12 @@ function buildTrain(typeKey) {
       coupler.position.set(0, 0.62, sign * (CAR_LEN / 2 + 0.3));
       markDetail(coupler); car.add(coupler);
     }
-    const lightGeo = new THREE.SphereGeometry(0.13, 8, 8);
-    for (const sx of [-0.95, 0.95]) {
+    const lightGeo = new THREE.SphereGeometry(isShink ? 0.1 : 0.13, 8, 8);
+    for (const sx of [-0.3, 0.3]) {
       const m = new THREE.MeshBasicMaterial({ color: 0xfff6d8 });
       const l = new THREE.Mesh(lightGeo, m);
-      l.position.set(sx, isShink ? 1.6 : 1.2, sign * (CAR_LEN / 2 + (isShink ? 6.8 : 0.12)));
+      if (isShink) l.position.set(sx, 1.62, sign * (CAR_LEN / 2 + T.noseLen - 1.7));
+      else l.position.set(sx * 3.17, 1.2, sign * (CAR_LEN / 2 + 0.12));
       car.add(l);
       (sign > 0 ? lampsPlus : lampsMinus).push(m);
     }
