@@ -105,9 +105,9 @@
   <h1>도쿄역 기차 구경</h1>
   <h2>TOKYO STATION RAIL YARD SIMULATOR</h2>
   <div class="desc">
-    야마노테선 E235가 진짜 모습 그대로 달려요.<br>
-    역의 10개 선로가 분기기를 지나 본선으로 합쳐지고,<br>
-    신호기가 길을 열어줄 때만 열차가 들어와요. 🚦
+    역에서는 선로가 부채꼴로 활짝 펼쳐지고,<br>
+    멀어지면 빌딩 사이 좁은 길로 모여들어요.<br>
+    신호기가 길을 열어줄 때만 열차가 들어옵니다. 🚦
   </div>
   <div class="start">▶ 출발합니다!</div>
 </div>
@@ -146,25 +146,31 @@ controls.target.set(0, 4, -10);
 controls.enableDamping = true;
 controls.dampingFactor = 0.07;
 controls.maxPolarAngle = Math.PI * 0.495;
-controls.minDistance = 6;
-controls.maxDistance = 500;
+controls.minDistance = 4;
+controls.maxDistance = 520;
 
 /* ================================================================
-   Track network
-   - 10 station tracks fan into 5 through lines via turnout ladders
-     (like the real yard: station has more tracks than the main line)
-   - through lines run to the edge of the world (±Z_END)
+   Track network — the throat
+   The yard is FAT at the station (10 tracks) and gets SLIM far away:
+   ladders merge it to 5 through lines, then the lines themselves sweep
+   together into an 18m corridor squeezed between buildings.
 ================================================================ */
-const Z_END = 760;               // rails run to the horizon
+const Z_END = 760;
 const PLATFORM_LEN = 210;
-const LADDER_CLEAR = 105;        // |z| where a train is fully inside the station
-const GAUGE = 0.72;              // half rail spacing
+const LADDER_CLEAR = 105;
+const GAUGE = 0.72;
 
-// through lines (what the main line narrows down to)
 const LINES = { A: -14.2, B: -9.8, C: 1.8, D: 6.2, S: 24 };
 
-// station tracks: x position, through line, and turnout segments
-// (segs are on the south side; the north side mirrors them)
+// stage 2: through lines converge laterally into the narrow corridor
+const SQUEEZE = {
+  A: { z0: 205, z1: 345, to: -2.2 },
+  B: { z0: 205, z1: 345, to:  2.2 },
+  C: { z0: 205, z1: 345, to:  6.6 },
+  D: { z0: 205, z1: 345, to: 11.0 },
+  S: { z0: 205, z1: 345, to: 16.0 },
+};
+
 const TRACKS = {
   S0: { x: -14.2, line: 'A', segs: [] },
   S1: { x:  -9.8, line: 'B', segs: [] },
@@ -180,21 +186,40 @@ const TRACKS = {
 const PLATFORM_XS = [-12, -4, 4, 12, 24];
 
 const smooth = k => k * k * (3 - 2 * k);
+const lerp = (a, b, k) => a + (b - a) * k;
 
-// x position of a station track's route at any z (handles the turnout S-curves)
+function lineXAt(line, az) {
+  const sq = SQUEEZE[line], x0 = LINES[line];
+  if (az <= sq.z0) return x0;
+  if (az >= sq.z1) return sq.to;
+  return lerp(x0, sq.to, smooth((az - sq.z0) / (sq.z1 - sq.z0)));
+}
+
 function xOfZ(trk, z) {
   const az = Math.abs(z);
   let x = trk.x;
   for (const seg of trk.segs) {
     if (az <= seg.z0) break;
     if (az >= seg.z1) { x = seg.to; continue; }
-    x = x + (seg.to - x) * smooth((az - seg.z0) / (seg.z1 - seg.z0));
+    x = lerp(x, seg.to, smooth((az - seg.z0) / (seg.z1 - seg.z0)));
     break;
   }
+  const sq = SQUEEZE[trk.line];
+  if (az > sq.z0) x = lineXAt(trk.line, az);
   return x;
 }
 
-/* ---------- routes: arc-length sampled paths for the trains ---------- */
+// outer edges of the rail corridor at any z (drives ballast, gantries, city)
+function corridorEdges(z) {
+  const az = Math.abs(z);
+  const left = lineXAt('A', az) - 3.2;
+  let right;
+  if (az <= 115) right = 29.4;
+  else if (az < 190) right = lerp(29.4, 27.2, smooth((az - 115) / 75));
+  else right = lineXAt('S', az) + 3.2;
+  return { left, right };
+}
+
 function buildRoute(trk, dir) {
   const step = 2;
   const pts = [];
@@ -246,20 +271,17 @@ function canvasTex(w, h, draw, rx = 1, ry = 1) {
   return t;
 }
 
-// gravel ballast
 const ballastTex = canvasTex(256, 256, (g, w, h) => {
   g.fillStyle = '#4e4a45'; g.fillRect(0, 0, w, h);
   for (let i = 0; i < 2600; i++) {
     const v = 50 + Math.random() * 70;
     g.fillStyle = `rgb(${v|0},${v*0.95|0},${v*0.88|0})`;
-    const r = 1 + Math.random() * 2.4;
     g.beginPath();
-    g.arc(Math.random() * w, Math.random() * h, r, 0, 7);
+    g.arc(Math.random() * w, Math.random() * h, 1 + Math.random() * 2.4, 0, 7);
     g.fill();
   }
-}, 8, 120);
+});
 
-// asphalt / concrete ground
 const asphaltTex = canvasTex(256, 256, (g, w, h) => {
   g.fillStyle = '#85878a'; g.fillRect(0, 0, w, h);
   for (let i = 0; i < 4000; i++) {
@@ -269,7 +291,6 @@ const asphaltTex = canvasTex(256, 256, (g, w, h) => {
   }
 }, 60, 60);
 
-// platform surface: concrete + tactile paving strip drawn separately
 const platformTex = canvasTex(256, 256, (g, w, h) => {
   g.fillStyle = '#b7b1a4'; g.fillRect(0, 0, w, h);
   for (let i = 0; i < 2600; i++) {
@@ -281,7 +302,6 @@ const platformTex = canvasTex(256, 256, (g, w, h) => {
   for (let y = 0; y <= h; y += 64) { g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke(); }
 }, 1, 40);
 
-// red brick for the Marunouchi building
 const brickTex = canvasTex(256, 256, (g, w, h) => {
   g.fillStyle = '#8c3a2b'; g.fillRect(0, 0, w, h);
   const bh = 16, bw = 32;
@@ -293,25 +313,55 @@ const brickTex = canvasTex(256, 256, (g, w, h) => {
     }
 }, 14, 3);
 
-function buildingTex(lit) {
+/* ---------- facade styles for the city generator ---------- */
+function facadeTex(style, lit) {
   return canvasTex(128, 256, (g, w, h) => {
-    g.fillStyle = lit ? '#0b1120' : '#9fb6c8'; g.fillRect(0, 0, w, h);
-    for (let y = 8; y < h - 16; y += 22)
-      for (let x = 6; x < w - 10; x += 16) {
-        if (lit) {
-          g.fillStyle = Math.random() < 0.5 ? `rgba(255,${200+Math.random()*55|0},120,.95)` : '#101826';
-        } else {
-          const v = 0.7 + Math.random() * 0.35;
-          g.fillStyle = `rgb(${135*v|0},${165*v|0},${190*v|0})`;
+    if (style === 0) {                     // blue glass curtain wall
+      g.fillStyle = lit ? '#0a101c' : '#7fa3c0'; g.fillRect(0, 0, w, h);
+      for (let y = 4; y < h - 8; y += 18)
+        for (let x = 4; x < w - 6; x += 14) {
+          if (lit) {
+            g.fillStyle = Math.random() < 0.42 ? `rgba(255,${205+Math.random()*50|0},130,.9)` : '#0e1624';
+          } else {
+            const v = 0.72 + Math.random() * 0.3;
+            g.fillStyle = `rgb(${120*v|0},${165*v|0},${200*v|0})`;
+          }
+          g.fillRect(x, y, 12, 16);
         }
-        g.fillRect(x, y, 10, 14);
+      g.fillStyle = lit ? 'rgba(40,60,90,.6)' : 'rgba(220,235,245,.5)';
+      for (let x = 0; x < w; x += 14) g.fillRect(x, 0, 1, h);
+    } else if (style === 1) {              // concrete, punched windows
+      g.fillStyle = lit ? '#11131a' : '#b6b3ac'; g.fillRect(0, 0, w, h);
+      for (let y = 10; y < h - 16; y += 24)
+        for (let x = 8; x < w - 12; x += 18) {
+          if (lit) {
+            g.fillStyle = Math.random() < 0.5 ? `rgba(255,${200+Math.random()*55|0},120,.95)` : '#151921';
+          } else {
+            const v = 0.6 + Math.random() * 0.3;
+            g.fillStyle = `rgb(${95*v|0},${115*v|0},${140*v|0})`;
+          }
+          g.fillRect(x, y, 11, 13);
+        }
+    } else {                               // white tower, horizontal ribbon windows
+      g.fillStyle = lit ? '#0d1018' : '#dfdcd4'; g.fillRect(0, 0, w, h);
+      for (let y = 8; y < h - 10; y += 20) {
+        if (lit) {
+          for (let x = 4; x < w - 8; x += 16) {
+            g.fillStyle = Math.random() < 0.45 ? `rgba(255,${205+Math.random()*50|0},125,.92)` : '#121620';
+            g.fillRect(x, y, 13, 10);
+          }
+        } else {
+          const v = 0.65 + Math.random() * 0.25;
+          g.fillStyle = `rgb(${110*v|0},${135*v|0},${160*v|0})`;
+          g.fillRect(4, y, w - 8, 10);
+        }
       }
+    }
   });
 }
-const bldgDayTex = buildingTex(false);
-const bldgNightTex = buildingTex(true);
+const facadeDay = [facadeTex(0, false), facadeTex(1, false), facadeTex(2, false)];
+const facadeNight = [facadeTex(0, true), facadeTex(1, true), facadeTex(2, true)];
 
-// procedural sides for Keihin-Tohoku / Chuo (atlas is Yamanote-only for now)
 function commuterSide(colorHex, doorsOpen) {
   return canvasTex(1024, 176, (g, w, h) => {
     const grad = g.createLinearGradient(0, 0, 0, h);
@@ -369,8 +419,7 @@ function shinkansenSide() {
 }
 
 /* ================================================================
-   E235 photo atlas (embedded, applied to the Yamanote line)
-   regions measured in pixels on the 1672x941 sheet
+   E235 photo atlas regions (1672x941 sheet)
 ================================================================ */
 const ATLAS_W = 1672, ATLAS_H = 941;
 const ATLAS_REGIONS = {
@@ -381,6 +430,8 @@ const ATLAS_REGIONS = {
   face:   { x: 1092, y: 158, w: 274,  h: 304 },
   under:  { x: 7,    y: 868, w: 1033, h: 66 },
   bogie:  { x: 1360, y: 545, w: 260,  h: 125 },
+  roof:   { x: 8,    y: 650, w: 820,  h: 195 },   // ribbed roof panel + vent grilles
+  ac:     { x: 4,    y: 533, w: 222,  h: 100 },   // air-conditioner unit close-up
 };
 const atlasData = document.getElementById('atlas-b64').textContent.trim();
 
@@ -397,7 +448,6 @@ function atlasRegionTex(atlas, r, flipX = false) {
   return t;
 }
 
-// doors-open variant: copy the atlas side strip and paint open doorways
 function makeOpenSideTex(img, r) {
   const c = document.createElement('canvas');
   c.width = r.w; c.height = r.h;
@@ -409,6 +459,22 @@ function makeOpenSideTex(img, r) {
     g.fillStyle = 'rgba(255,228,170,.5)';
     g.fillRect(dx0 + 5, r.doorY[0] + 6, dx1 - dx0 - 10, r.doorY[1] - r.doorY[0] - 18);
   }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
+}
+
+// the roof strip runs lengthwise on the sheet — bake it rotated so the
+// cylinder roof cap can map u=across / v=along the car
+function makeRoofTex(img) {
+  const r = ATLAS_REGIONS.roof;
+  const c = document.createElement('canvas');
+  c.width = r.h; c.height = r.w;
+  const g = c.getContext('2d');
+  g.translate(r.h / 2, r.w / 2);
+  g.rotate(Math.PI / 2);
+  g.drawImage(img, r.x, r.y, r.w, r.h, -r.w / 2, -r.h / 2, r.w, r.h);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   t.anisotropy = 4;
@@ -465,7 +531,56 @@ scene.add(moon);
 scene.fog = new THREE.Fog(0xcfe4f7, 150, 800);
 
 /* ================================================================
-   Ground / ballast / rails / turnout ladders
+   Occlusion fading — buildings/roofs turn translucent when the camera
+   is inside them or when they block the view of a followed train
+================================================================ */
+const fadeables = [];
+function registerFadeable(root) {
+  const mats = [];
+  root.traverse(o => {
+    if (o.material) {
+      const ms = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of ms) if (!mats.includes(m)) mats.push(m);
+    }
+  });
+  const box = new THREE.Box3().setFromObject(root);
+  fadeables.push({ mats, box, value: 1, target: 1, applied: false });
+}
+
+const _fadeRay = new THREE.Ray();
+const _trainPos = new THREE.Vector3();
+function updateFades(dt) {
+  for (const f of fadeables) f.target = 1;
+  for (const f of fadeables)
+    if (f.box.containsPoint(camera.position)) f.target = 0.12;
+  if (followTrain && followTrain.group.visible) {
+    followTrain.route.posAt(followTrain.sHead - 8, _p);
+    _trainPos.set(_p.x, 3, _p.z);
+    const dist = camera.position.distanceTo(_trainPos);
+    _fadeRay.origin.copy(camera.position);
+    _fadeRay.direction.copy(_trainPos).sub(camera.position).normalize();
+    for (const f of fadeables) {
+      if (f.target < 1) continue;
+      if (_fadeRay.intersectsBox(f.box) &&
+          f.box.distanceToPoint(camera.position) < dist) f.target = 0.18;
+    }
+  }
+  for (const f of fadeables) {
+    if (Math.abs(f.target - f.value) < 0.002 && f.applied && f.target === 1 && f.value > 0.998) continue;
+    f.value += (f.target - f.value) * Math.min(1, dt * 6);
+    if (f.target === 1 && f.value > 0.998) f.value = 1;
+    const transparent = f.value < 0.985;
+    for (const m of f.mats) {
+      m.transparent = transparent;
+      m.opacity = transparent ? f.value : 1;
+      m.depthWrite = f.value > 0.55;
+    }
+    f.applied = true;
+  }
+}
+
+/* ================================================================
+   Ground / funnel ballast / rails / ladders / squeeze curves
 ================================================================ */
 const ground = new THREE.Mesh(
   new THREE.PlaneGeometry(1700, 1700),
@@ -476,13 +591,28 @@ ground.position.y = -0.05;
 ground.receiveShadow = true;
 scene.add(ground);
 
-const ballast = new THREE.Mesh(
-  new THREE.BoxGeometry(50, 0.3, Z_END * 2),
-  new THREE.MeshStandardMaterial({ map: ballastTex, roughness: 1 })
-);
-ballast.position.set(6, 0.15, 0);
-ballast.receiveShadow = true;
-scene.add(ballast);
+// ballast bed shaped like the funnel: wide at the station, slim far out
+{
+  const pos = [], uv = [], idx = [];
+  let i = 0;
+  for (let z = -Z_END; z <= Z_END; z += 8, i++) {
+    const { left, right } = corridorEdges(z);
+    pos.push(left, 0.28, z, right, 0.28, z);
+    uv.push(0, z / 6, (right - left) / 6, z / 6);
+    if (i > 0) {
+      const a = (i - 1) * 2;
+      idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  const bed = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: ballastTex, roughness: 1 }));
+  bed.receiveShadow = true;
+  scene.add(bed);
+}
 
 const railMat = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, roughness: 0.3, metalness: 0.85 });
 const tieMat = new THREE.MeshStandardMaterial({ color: 0x46413b, roughness: 1 });
@@ -505,12 +635,10 @@ function straightRails(x, z0, z1) {
   }
 }
 
-// curved connector: rails as tubes following x(z), ties rotated to match
 function curveRails(x0, x1, z0, z1, sideSign) {
-  const zs0 = sideSign * z0, zs1 = sideSign * z1;
+  const n = Math.max(22, Math.ceil((z1 - z0) / 3));
   for (const off of [-GAUGE, GAUGE]) {
     const pts = [];
-    const n = 22;
     for (let i = 0; i <= n; i++) {
       const az = z0 + (z1 - z0) * (i / n);
       const x = x0 + (x1 - x0) * smooth((az - z0) / (z1 - z0));
@@ -533,22 +661,32 @@ function curveRails(x0, x1, z0, z1, sideSign) {
   }
 }
 
-// through lines that pass straight through the station run edge to edge
-straightRails(-14.2, -Z_END, Z_END);
-straightRails( -9.8, -Z_END, Z_END);
-straightRails(  1.8, -Z_END, Z_END);
-straightRails(  6.2, -Z_END, Z_END);
+// station-passing through lines: straight in the yard, then squeeze curve,
+// then the slim corridor out to the horizon
+for (const l of ['A', 'B', 'C', 'D']) {
+  const sq = SQUEEZE[l];
+  straightRails(LINES[l], -sq.z0, sq.z0);
+  for (const s of [1, -1]) curveRails(LINES[l], sq.to, sq.z0, sq.z1, s);
+  straightRails(sq.to, sq.z1, Z_END);
+  straightRails(sq.to, -Z_END, -sq.z1);
+}
 // Shinkansen through line exists only beyond the ladders
-straightRails(24, -Z_END, -150);
-straightRails(24, 150, Z_END);
-// station-only tracks end where their turnouts begin
+{
+  const sq = SQUEEZE.S;
+  straightRails(24, 150, sq.z0);
+  straightRails(24, -sq.z0, -150);
+  for (const s of [1, -1]) curveRails(24, sq.to, sq.z0, sq.z1, s);
+  straightRails(sq.to, sq.z1, Z_END);
+  straightRails(sq.to, -Z_END, -sq.z1);
+}
+// station-only tracks
 straightRails(-6.2, -115, 115);
 straightRails(-1.8, -115, 115);
 straightRails( 9.8, -155, 155);
 straightRails(14.2, -115, 115);
 straightRails(21.8, -115, 115);
 straightRails(26.2, -115, 115);
-// turnout ladders, both ends of the station
+// turnout ladders
 for (const s of [1, -1]) {
   curveRails(-6.2, -9.8, 115, 150, s);
   curveRails(-1.8,  1.8, 115, 150, s);
@@ -558,7 +696,6 @@ for (const s of [1, -1]) {
   curveRails(26.2, 24,   115, 150, s);
 }
 
-// all ties in one InstancedMesh (single draw call)
 {
   const ties = new THREE.InstancedMesh(tieGeo, tieMat, tieMatrices.length);
   tieMatrices.forEach((m, i) => ties.setMatrixAt(i, m));
@@ -568,30 +705,38 @@ for (const s of [1, -1]) {
 }
 
 /* ================================================================
-   Platforms (teal roofs like the satellite photo)
+   Platforms — long arched roofs in mint/white like the photo
 ================================================================ */
 const roofLightMat = new THREE.MeshStandardMaterial({ color: 0xfff6dd, emissive: 0xffeebb, emissiveIntensity: 0 });
 {
   const platMat = new THREE.MeshStandardMaterial({ map: platformTex, roughness: 0.95 });
-  const roofMat = new THREE.MeshStandardMaterial({ color: 0x3fa896, roughness: 0.7 });
   const yellowMat = new THREE.MeshStandardMaterial({ color: 0xe8c63a, roughness: 0.9 });
+  const roofColors = [0xbfe0d6, 0xe8e6df, 0x9fc8bd, 0xdfe3e4, 0x8fb8ac];
   const pGeo = new THREE.BoxGeometry(3.4, 1.1, PLATFORM_LEN);
-  const rGeo = new THREE.BoxGeometry(4.3, 0.14, PLATFORM_LEN + 4);
   const lGeo = new THREE.BoxGeometry(0.6, 0.06, PLATFORM_LEN - 8);
   const yGeo = new THREE.BoxGeometry(0.3, 0.03, PLATFORM_LEN);
+  // arched roof: open cylinder segment, chord = 4.6m, peak y=5.6
+  const R = 5, HALF = Math.asin(2.3 / R);
+  const archGeo = new THREE.CylinderGeometry(R, R, PLATFORM_LEN + 6, 16, 1, true, Math.PI - HALF, HALF * 2);
   const pillarGeo = new THREE.CylinderGeometry(0.13, 0.13, 3.9, 8);
   const pillarMat = new THREE.MeshStandardMaterial({ color: 0x5e6a72, roughness: 0.6, metalness: 0.4 });
   const nPillars = Math.floor(PLATFORM_LEN / 14);
   const pillars = new THREE.InstancedMesh(pillarGeo, pillarMat, nPillars * PLATFORM_XS.length);
   const m = new THREE.Matrix4();
   let pi = 0;
-  for (const x of PLATFORM_XS) {
+  PLATFORM_XS.forEach((x, i) => {
     const p = new THREE.Mesh(pGeo, platMat);
     p.position.set(x, 0.55, 0); p.castShadow = p.receiveShadow = true; scene.add(p);
-    const roof = new THREE.Mesh(rGeo, roofMat);
-    roof.position.set(x, 5.05, 0); roof.castShadow = true; scene.add(roof);
+    const archMat = new THREE.MeshStandardMaterial({
+      color: roofColors[i % roofColors.length], roughness: 0.65, side: THREE.DoubleSide });
+    const roof = new THREE.Mesh(archGeo, archMat);
+    roof.rotation.x = Math.PI / 2;
+    roof.position.set(x, 5.6 - R, 0);
+    roof.castShadow = true;
+    scene.add(roof);
+    registerFadeable(roof);
     const lights = new THREE.Mesh(lGeo, roofLightMat);
-    lights.position.set(x, 4.95, 0); scene.add(lights);
+    lights.position.set(x, 4.9, 0); scene.add(lights);
     for (const dx of [-1.45, 1.45]) {
       const yl = new THREE.Mesh(yGeo, yellowMat);
       yl.position.set(x + dx, 1.12, 0); scene.add(yl);
@@ -600,33 +745,45 @@ const roofLightMat = new THREE.MeshStandardMaterial({ color: 0xfff6dd, emissive:
       m.makeTranslation(x, 3.05, -PLATFORM_LEN / 2 + 7 + k * 14);
       pillars.setMatrixAt(pi++, m);
     }
-  }
+  });
   pillars.instanceMatrix.needsUpdate = true;
   pillars.castShadow = true;
   scene.add(pillars);
 }
 
-/* ---------- catenary gantries & wires (hidden on low quality) ---------- */
+/* ---------- catenary: gantries follow the funnel, wires follow lines ---------- */
 const detailGroup = new THREE.Group();
 {
   const poleGeo = new THREE.CylinderGeometry(0.16, 0.2, 8.6, 6);
-  const beamGeo = new THREE.BoxGeometry(50, 0.35, 0.35);
   const steelMat = new THREE.MeshStandardMaterial({ color: 0x6c7378, roughness: 0.6, metalness: 0.5 });
   for (let z = -740; z <= 740; z += 46) {
-    for (const x of [-17.5, 29.5]) {
+    const { left, right } = corridorEdges(z);
+    for (const x of [left - 1.4, right + 1.4]) {
       const p = new THREE.Mesh(poleGeo, steelMat);
       p.position.set(x, 4.3, z);
       if (Math.abs(z) < 240) p.castShadow = true;
       detailGroup.add(p);
     }
-    const b = new THREE.Mesh(beamGeo, steelMat);
-    b.position.set(6, 8.3, z); detailGroup.add(b);
+    const w = right - left + 4.4;
+    const b = new THREE.Mesh(new THREE.BoxGeometry(w, 0.35, 0.35), steelMat);
+    b.position.set((left + right) / 2, 8.3, z);
+    detailGroup.add(b);
   }
+  // contact wires sweep with the through lines
   const wireMat = new THREE.MeshBasicMaterial({ color: 0x222426 });
-  for (const x of [-14.2, -9.8, 1.8, 6.2, 24]) {
-    const w = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, Z_END * 2), wireMat);
-    w.position.set(x, 6.3, 0); detailGroup.add(w);
+  function wireAlong(line, zFrom, zTo) {
+    const pts = [];
+    for (let z = zFrom; z <= zTo; z += 12)
+      pts.push(new THREE.Vector3(lineXAt(line, Math.abs(z)), 6.3, z));
+    const tube = new THREE.Mesh(
+      new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), pts.length * 2, 0.03, 4, false),
+      wireMat
+    );
+    detailGroup.add(tube);
   }
+  for (const l of ['A', 'B', 'C', 'D']) wireAlong(l, -Z_END, Z_END);
+  wireAlong('S', 150, Z_END);
+  wireAlong('S', -Z_END, -150);
   for (const x of [-6.2, -1.8, 9.8, 14.2, 21.8, 26.2]) {
     const w = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 240), wireMat);
     w.position.set(x, 6.3, 0); detailGroup.add(w);
@@ -635,9 +792,9 @@ const detailGroup = new THREE.Group();
 scene.add(detailGroup);
 
 /* ================================================================
-   Signals — show the block dispatcher's state for each through line
+   Signals
 ================================================================ */
-const signals = [];   // { side:'N'|'S', line, redMat, greenMat }
+const signals = [];
 {
   const poleGeo = new THREE.CylinderGeometry(0.07, 0.09, 4.2, 6);
   const headGeo = new THREE.BoxGeometry(0.5, 1.1, 0.25);
@@ -645,7 +802,7 @@ const signals = [];   // { side:'N'|'S', line, redMat, greenMat }
   const poleMat = new THREE.MeshStandardMaterial({ color: 0x33383d, roughness: 0.7 });
   for (const [line, lx] of Object.entries(LINES)) {
     for (const side of ['N', 'S']) {
-      const z = side === 'N' ? -202 : 202;
+      const z = side === 'N' ? -198 : 198;
       const g = new THREE.Group();
       const pole = new THREE.Mesh(poleGeo, poleMat);
       pole.position.y = 2.1; g.add(pole);
@@ -664,7 +821,7 @@ const signals = [];   // { side:'N'|'S', line, redMat, greenMat }
 }
 
 /* ================================================================
-   Marunouchi red-brick station building + city towers
+   Marunouchi red-brick station building
 ================================================================ */
 const station = new THREE.Group();
 {
@@ -709,29 +866,96 @@ const station = new THREE.Group();
 }
 station.position.set(-40, 0, 0);
 scene.add(station);
+registerFadeable(station);
 
-const towers = [];
+/* ================================================================
+   City generator — blocks hugging the rail corridor, dense and varied
+   like Marunouchi/Yaesu: glass curtain walls, concrete offices, white
+   towers, podiums, rooftop penthouses. Buildings lean in close where
+   the corridor is slim.
+================================================================ */
+const cityMats = [];
+const cityNear = new THREE.Group();
+const cityFar = new THREE.Group();
 {
-  const spots = [
-    [-85, -90, 26, 95], [-95, -20, 30, 78], [-88, 55, 24, 110], [-110, 120, 32, 70],
-    [-120, -150, 28, 88], [-80, 150, 26, 92],
-    [60, -120, 30, 100], [70, -45, 26, 120], [62, 30, 24, 85], [72, 100, 32, 105],
-    [105, -10, 36, 140], [100, 160, 28, 75], [115, 70, 30, 95], [-130, 30, 26, 60],
-    [-90, 260, 30, 85], [75, 270, 26, 95], [-95, -260, 28, 80], [80, -260, 30, 90],
-  ];
-  for (const [x, z, w, h] of spots) {
+  const rng = (() => { let s = 1234567; return () => (s = s * 16807 % 2147483647) / 2147483647; })();
+  const roofMat = new THREE.MeshStandardMaterial({ color: 0x8e9296, roughness: 0.9 });
+
+  function makeBuilding(x, z, w, d, h, taper) {
+    const g = new THREE.Group();
+    const style = (rng() * 3) | 0;
     const mat = new THREE.MeshStandardMaterial({
-      map: bldgDayTex.clone(), emissiveMap: bldgNightTex, emissive: 0xffffff,
-      emissiveIntensity: 0, roughness: 0.45, metalness: 0.25,
+      map: facadeDay[style].clone(),
+      emissiveMap: facadeNight[style],
+      emissive: 0xffffff, emissiveIntensity: 0,
+      roughness: style === 0 ? 0.35 : 0.7,
+      metalness: style === 0 ? 0.4 : 0.1,
     });
-    mat.map.repeat.set(Math.max(1, w / 14 | 0), Math.max(2, h / 16 | 0));
-    const t = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), mat);
-    t.position.set(x, h / 2, z);
-    t.castShadow = t.receiveShadow = true;
-    scene.add(t);
-    towers.push(t);
+    mat.map.repeat.set(Math.max(1, (w + d) / 26 | 0), Math.max(2, h / 15 | 0));
+    cityMats.push(mat);
+
+    if (taper && h > 60) {
+      const ph = 10 + rng() * 8;
+      const podium = new THREE.Mesh(new THREE.BoxGeometry(w, ph, d), mat);
+      podium.position.y = ph / 2;
+      podium.castShadow = podium.receiveShadow = true;
+      g.add(podium);
+      const tw = w * 0.72, td = d * 0.72;
+      const tower = new THREE.Mesh(new THREE.BoxGeometry(tw, h - ph, td), mat);
+      tower.position.y = ph + (h - ph) / 2;
+      tower.castShadow = tower.receiveShadow = true;
+      g.add(tower);
+      const pent = new THREE.Mesh(new THREE.BoxGeometry(tw * 0.4, 4, td * 0.4), roofMat);
+      pent.position.y = h + 2;
+      g.add(pent);
+    } else {
+      const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      body.position.y = h / 2;
+      body.castShadow = body.receiveShadow = true;
+      g.add(body);
+      if (rng() < 0.6) {
+        const pent = new THREE.Mesh(new THREE.BoxGeometry(w * 0.35, 3, d * 0.35), roofMat);
+        pent.position.y = h + 1.5;
+        g.add(pent);
+      }
+    }
+    g.position.set(x, 0, z);
+    return g;
+  }
+
+  for (const side of [-1, 1]) {
+    let z = -720;
+    while (z < 720) {
+      const d = 26 + rng() * 22;
+      const gap = 7 + rng() * 12;
+      const zC = z + d / 2;
+      const edges = corridorEdges(zC);
+      let inner = side < 0 ? edges.left - 9 : edges.right + 9;
+      // keep the Marunouchi plaza clear in front of the brick station
+      if (side < 0 && Math.abs(zC) < 125) inner = Math.min(inner, -62);
+
+      const rows = Math.abs(zC) < 460 ? 2 : 1;
+      let xEdge = inner;
+      for (let row = 0; row < rows; row++) {
+        const w = 20 + rng() * 18;
+        const street = row === 0 ? 0 : 8 + rng() * 8;
+        const x = side < 0 ? xEdge - street - w / 2 : xEdge + street + w / 2;
+        let h = 35 + rng() * 75;
+        if (Math.abs(zC) < 280) h *= 1.3;
+        if (rng() < 0.15) h *= 1.5;
+        h = Math.min(175, Math.max(28, h));
+        const b = makeBuilding(x, zC, w, d - 4, h, rng() < 0.45);
+        (row === 0 ? cityNear : cityFar).add(b);
+        xEdge = side < 0 ? x - w / 2 : x + w / 2;
+      }
+      z += d + gap;
+    }
   }
 }
+scene.add(cityNear);
+scene.add(cityFar);
+for (const grp of [cityNear, cityFar])
+  for (const b of grp.children) registerFadeable(b);
 
 /* ================================================================
    Trains
@@ -740,13 +964,34 @@ const CAR_LEN = 19.5, CAR_W = 2.95, CAR_H = 3.2, CAR_GAP = 0.5;
 const carGeo = new THREE.BoxGeometry(CAR_W, CAR_H, CAR_LEN);
 const skirtGeo = new THREE.BoxGeometry(2.6, 0.5, CAR_LEN - 1);
 const bogiePlaneGeo = new THREE.PlaneGeometry(2.7, 1.3);
+const bogieCoreGeo = new THREE.BoxGeometry(2.2, 0.9, 2.3);
+const gangwayGeo = new THREE.BoxGeometry(1.5, 2.3, 0.55);
 const roofCarMat = new THREE.MeshStandardMaterial({ color: 0xb0b4b8, roughness: 0.6 });
 const darkMat = new THREE.MeshStandardMaterial({ color: 0x24272b, roughness: 0.9 });
 const endMat = new THREE.MeshStandardMaterial({ color: 0x9da2a7, roughness: 0.7 });
-const acGeo = new THREE.BoxGeometry(1.7, 0.28, 3.2);
+const acGeo = new THREE.BoxGeometry(1.7, 0.26, 3.0);
 
-// materials filled in once the atlas loads
-const yamanoteMats = { side1: null, side2: null, side1Open: null, side2Open: null, face: null, faceBack: null, under: null, bogie: null };
+// curved roof cap: arc chord = car width, peak ~0.35m above the body top
+const ROOF_R = 3.4, ROOF_HALF = 0.45;
+const roofCapGeo = new THREE.CylinderGeometry(
+  ROOF_R, ROOF_R, CAR_LEN, 14, 1, true, Math.PI - ROOF_HALF, ROOF_HALF * 2);
+const ROOF_Y = 4.15 - ROOF_R * Math.cos(ROOF_HALF);   // arc peak ≈ 4.49
+// flat arc segment closing the curved roof at the cab ends
+const roofEndShape = new THREE.Shape();
+{
+  const n = 10;
+  for (let i = 0; i <= n; i++) {
+    const a = -ROOF_HALF + (2 * ROOF_HALF) * (i / n);
+    const px = ROOF_R * Math.sin(a), py = ROOF_R * Math.cos(a);
+    if (i === 0) roofEndShape.moveTo(px, py); else roofEndShape.lineTo(px, py);
+  }
+}
+const roofEndGeo = new THREE.ShapeGeometry(roofEndShape);
+
+const yamanoteMats = {
+  side1: null, side2: null, side1Open: null, side2Open: null,
+  face: null, faceBack: null, under: null, bogie: null, roof: null, ac: null,
+};
 
 const trainTypes = {
   yamanote: { name: '야마노테선 E235', atlas: true, cars: 8, maxSpeed: 22, dwell: 8 },
@@ -767,22 +1012,47 @@ const trainTypes = {
   },
 };
 
+let trainDetailVisible = true;
+function markDetail(mesh) { mesh.userData.detail = true; mesh.visible = trainDetailVisible; return mesh; }
+
 function buildTrain(typeKey) {
   const T = trainTypes[typeKey];
   const isShink = typeKey === 'shinkansen';
   const group = new THREE.Group();
   const cars = [];
 
-  let sideMatA, sideMatB, underMat, bogieMat;
+  let sideMatA, sideMatB, roofMat, acMat;
   if (T.atlas) {
     sideMatA = new THREE.MeshStandardMaterial({ map: yamanoteMats.side1, roughness: 0.4, metalness: 0.15 });
     sideMatB = new THREE.MeshStandardMaterial({ map: yamanoteMats.side2, roughness: 0.4, metalness: 0.15 });
-    underMat = new THREE.MeshStandardMaterial({ map: yamanoteMats.under, roughness: 0.9 });
-    bogieMat = new THREE.MeshStandardMaterial({ map: yamanoteMats.bogie, roughness: 0.85 });
+    roofMat = new THREE.MeshStandardMaterial({ map: yamanoteMats.roof, roughness: 0.55 });
+    acMat = new THREE.MeshStandardMaterial({ map: yamanoteMats.ac, roughness: 0.6 });
   } else {
     sideMatA = sideMatB = new THREE.MeshStandardMaterial({ map: T.sideClosed, roughness: 0.45, metalness: 0.25 });
-    underMat = new THREE.MeshStandardMaterial({ map: yamanoteMats.under, roughness: 0.9 });
-    bogieMat = new THREE.MeshStandardMaterial({ map: yamanoteMats.bogie, roughness: 0.85 });
+    roofMat = roofCarMat;
+    acMat = roofCarMat;
+  }
+  const underMat = new THREE.MeshStandardMaterial({ map: yamanoteMats.under, roughness: 0.9 });
+  const bogieMat = new THREE.MeshStandardMaterial({ map: yamanoteMats.bogie, roughness: 0.85 });
+
+  function addPantograph(car, z0) {
+    const pBase = new THREE.Mesh(new THREE.BoxGeometry(1.25, 0.07, 0.9), darkMat);
+    pBase.position.set(0, 4.6, z0);
+    markDetail(pBase); car.add(pBase);
+    for (const sx of [-0.45, 0.45]) {
+      const ins = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, 0.18, 6), darkMat);
+      ins.position.set(sx, 4.5, z0);
+      markDetail(ins); car.add(ins);
+    }
+    const lower = new THREE.Mesh(new THREE.BoxGeometry(0.07, 1.0, 0.07), darkMat);
+    lower.position.set(0, 5.05, z0 + 0.32); lower.rotation.x = 0.62;
+    markDetail(lower); car.add(lower);
+    const upper = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.0, 0.06), darkMat);
+    upper.position.set(0, 5.85, z0 - 0.1); upper.rotation.x = -0.7;
+    markDetail(upper); car.add(upper);
+    const shoe = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.05, 0.24), darkMat);
+    shoe.position.set(0, 6.26, z0 - 0.42);
+    markDetail(shoe); car.add(shoe);
   }
 
   for (let i = 0; i < T.cars; i++) {
@@ -791,12 +1061,22 @@ function buildTrain(typeKey) {
     body.position.y = 2.55;
     body.castShadow = true;
     car.add(body);
-    // under-floor equipment skirt
+
+    // curved roof cap (atlas roof texture on the E235)
+    const cap = new THREE.Mesh(roofCapGeo, roofMat);
+    cap.rotation.x = Math.PI / 2;
+    cap.position.y = ROOF_Y;
+    car.add(cap);
+
     const skirt = new THREE.Mesh(skirtGeo, [underMat, underMat, darkMat, darkMat, darkMat, darkMat]);
     skirt.position.y = 0.72;
     car.add(skirt);
-    // photo bogies
+
     for (const bz of [-6.4, 6.4]) {
+      const core = new THREE.Mesh(bogieCoreGeo, darkMat);
+      core.position.set(0, 0.7, bz);
+      markDetail(core);
+      car.add(core);
       for (const sx of [-1, 1]) {
         const b = new THREE.Mesh(bogiePlaneGeo, bogieMat);
         b.position.set(sx * 1.18, 0.75, bz);
@@ -804,25 +1084,24 @@ function buildTrain(typeKey) {
         car.add(b);
       }
     }
-    // roof: AC units + pantographs
+
     if (!isShink) {
-      const ac = new THREE.Mesh(acGeo, roofCarMat);
-      ac.position.set(0, 4.3, -3);
+      const ac = new THREE.Mesh(acGeo, acMat);
+      ac.position.set(0, 4.45, -3.4);
+      markDetail(ac);
       car.add(ac);
-      if (i === 2 || i === 5) {
-        const pant = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.08, 0.08), darkMat);
-        pant.position.set(0, 5.4, 3);
-        car.add(pant);
-        const arm = new THREE.Mesh(new THREE.BoxGeometry(0.07, 1.4, 0.07), darkMat);
-        arm.position.set(0, 4.6, 3); arm.rotation.x = 0.5;
-        car.add(arm);
+      if (i > 0) {       // inter-car gangway bellows
+        const gw = new THREE.Mesh(gangwayGeo, darkMat);
+        gw.position.set(0, 2.5, -CAR_LEN / 2 - 0.05);
+        markDetail(gw);
+        car.add(gw);
       }
+      if (i === 2 || i === 5) addPantograph(car, 3.2);
     }
     group.add(car);
     cars.push(car);
   }
 
-  // train ends: photo face for E235, painted face for E233, nose for Shinkansen
   function addEnd(carIdx, sign) {
     const car = cars[carIdx];
     if (isShink) {
@@ -842,8 +1121,20 @@ function buildTrain(typeKey) {
       f.position.set(0, 2.35, sign * (CAR_LEN / 2 + 0.03));
       if (sign < 0) f.rotation.y = Math.PI;
       car.add(f);
+      // close the curved roof above the cab
+      const capEnd = new THREE.Mesh(roofEndGeo, endMat);
+      capEnd.position.set(0, ROOF_Y, sign * (CAR_LEN / 2 + 0.02));
+      if (sign < 0) capEnd.rotation.y = Math.PI;
+      markDetail(capEnd);
+      car.add(capEnd);
+      // front skirt + coupler
+      const fs = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.6, 0.5), darkMat);
+      fs.position.set(0, 0.75, sign * (CAR_LEN / 2 - 0.1));
+      markDetail(fs); car.add(fs);
+      const coupler = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.34, 0.7), darkMat);
+      coupler.position.set(0, 0.62, sign * (CAR_LEN / 2 + 0.3));
+      markDetail(coupler); car.add(coupler);
     }
-    // marker lights: white on the leading end, red on the trailing end
     const lightGeo = new THREE.SphereGeometry(0.13, 8, 8);
     const color = sign > 0 ? 0xfff6d8 : 0xff2a1a;
     for (const sx of [-0.95, 0.95]) {
@@ -852,7 +1143,7 @@ function buildTrain(typeKey) {
       car.add(l);
     }
   }
-  addEnd(0, 1);             // car 0 leads (+s direction)
+  addEnd(0, 1);
   addEnd(T.cars - 1, -1);
 
   const len = T.cars * (CAR_LEN + CAR_GAP) - CAR_GAP;
@@ -860,10 +1151,9 @@ function buildTrain(typeKey) {
 }
 
 /* ================================================================
-   Dispatcher — block reservations keep trains from colliding
-   on the shared through lines
+   Dispatcher — block reservations on the shared through lines
 ================================================================ */
-const blocks = {};   // 'N:B' / 'S:C' ... -> occupying train or undefined
+const blocks = {};
 function blockFree(id) { return !blocks[id]; }
 function occupy(id, t) { blocks[id] = t; }
 function release(id, t) { if (blocks[id] === t) delete blocks[id]; }
@@ -897,7 +1187,6 @@ addTrain('yamanote', 'S4',  1, 3);
 addTrain('yamanote', 'S5', -1, 10);
 addTrain('shinkansen', 'S8', 1, 8);
 
-// parked Shinkansen on the spare east track (static scenery)
 let parkedTrain = null;
 
 function setDoors(t, open) {
@@ -944,7 +1233,6 @@ function updateTrain(t, dt) {
           t.speed = Math.max(1.2, t.type.maxSpeed * Math.sqrt(dist / t.brakeDist));
         t.sHead += t.speed * dt;
       }
-      // entry block clears once the tail is fully inside the station
       if (blocks[t.entryBlock] === t && t.sHead - t.len > t.route.sEnterClear)
         release(t.entryBlock, t);
       placeCars(t);
@@ -952,7 +1240,6 @@ function updateTrain(t, dt) {
     }
     case 'dwell':
       t.timer -= dt;
-      // hold at the platform (doors open) until the exit line is clear
       if (t.timer <= 0 && blockFree(t.exitBlock)) {
         occupy(t.exitBlock, t);
         t.state = 'closing'; t.timer = 1.6;
@@ -991,7 +1278,7 @@ function updateSignals() {
 }
 
 /* ================================================================
-   Sound (synthesized) — off by default
+   Sound
 ================================================================ */
 const sound = (() => {
   let ctx = null, on = false;
@@ -1045,7 +1332,7 @@ function updateDayNight(dt) {
   renderer.toneMappingExposure = 1.0 - b * 0.2;
   roofLightMat.emissiveIntensity = b * 1.8;
   station.userData.glowMat.emissiveIntensity = b * 1.5;
-  for (const t of towers) t.material.emissiveIntensity = b * 1.0;
+  for (const m of cityMats) m.emissiveIntensity = b * 1.0;
 }
 
 /* ================================================================
@@ -1056,6 +1343,12 @@ const qualities = {
   med:  { px: 1.0, shadows: true,  shadowSize: 1024, fogFar: 650, detail: true },
   high: { px: Math.min(devicePixelRatio, 2), shadows: true, shadowSize: 2048, fogFar: 800, detail: true },
 };
+function setTrainDetail(visible) {
+  trainDetailVisible = visible;
+  const all = parkedTrain ? [...trains, parkedTrain] : trains;
+  for (const t of all)
+    t.group.traverse(o => { if (o.userData.detail) o.visible = visible; });
+}
 function applyQuality(q) {
   const Q = qualities[q];
   renderer.setPixelRatio(Q.px);
@@ -1072,8 +1365,10 @@ function applyQuality(q) {
   });
   scene.fog.far = Q.fogFar;
   detailGroup.visible = Q.detail;
+  cityFar.visible = Q.detail;
+  setTrainDetail(Q.detail);
   document.querySelectorAll('#quality button').forEach(b => b.classList.toggle('active', b.dataset.q === q));
-  toast({ low: '저사양 모드 (그림자 끔)', med: '보통 화질', high: '고화질 모드' }[q]);
+  toast({ low: '저사양 모드 (그림자·디테일 끔)', med: '보통 화질', high: '고화질 모드' }[q]);
 }
 const likelyLowEnd = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent) || navigator.hardwareConcurrency <= 4;
 
@@ -1098,7 +1393,7 @@ const ease = k => k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
 const views = {
   sat:  { pos: [6, 330, 40], target: [6, 0, 0], label: '위성 뷰 🛰️' },
   plat: { pos: [-12, 3.2, 75], target: [-13, 2.6, -40], label: '승강장 뷰 🚉' },
-  wide: { pos: [-95, 50, 150], target: [0, 6, -10], label: '전경 뷰 🏙️' },
+  wide: { pos: [-105, 55, 165], target: [0, 6, -10], label: '전경 뷰 🏙️' },
 };
 
 let followIdx = 0;
@@ -1123,7 +1418,7 @@ function updateFollow(dt) {
   }
   const t = followTrain;
   t.route.posAt(t.sHead - 4, _fp);
-  const fx = Math.sin(_fp.yaw), fz = Math.cos(_fp.yaw);   // forward
+  const fx = Math.sin(_fp.yaw), fz = Math.cos(_fp.yaw);
   const desired = new THREE.Vector3(
     _fp.x - fx * 16 + fz * 13, 6.5, _fp.z - fz * 16 - fx * 13);
   const look = new THREE.Vector3(_fp.x + fx * 8, 3, _fp.z + fz * 8);
@@ -1171,7 +1466,7 @@ btns.sound.addEventListener('click', () => {
   if (on) sound.jingle();
 });
 document.querySelectorAll('#quality button').forEach(b =>
-  b.addEventListener('click', () => applyQuality(b.dataset.q)));
+  b.addEventListener('click', () => { currentQuality = b.dataset.q; applyQuality(b.dataset.q); }));
 
 document.addEventListener('keydown', e => {
   if (e.code === 'KeyT') btns.night.click();
@@ -1219,10 +1514,9 @@ overlay.addEventListener('click', () => {
 }, { once: true });
 
 /* ================================================================
-   Boot: load the E235 atlas, then start everything
+   Boot
 ================================================================ */
 function startTrains() {
-  // parked Shinkansen, placed along the straight spare track
   parkedTrain = buildTrain('shinkansen');
   const route = buildRoute(TRACKS.S9, 1);
   const sMid = route.sAtZ(-30) + parkedTrain.len / 2;
@@ -1235,6 +1529,8 @@ function startTrains() {
   scene.add(parkedTrain.group);
 }
 
+let currentQuality = likelyLowEnd ? 'med' : 'high';
+
 new THREE.TextureLoader().load(atlasData, (atlas) => {
   atlas.colorSpace = THREE.SRGBColorSpace;
   atlas.anisotropy = 8;
@@ -1245,11 +1541,11 @@ new THREE.TextureLoader().load(atlasData, (atlas) => {
   yamanoteMats.faceBack = atlasRegionTex(atlas, R.face, true);
   yamanoteMats.under = atlasRegionTex(atlas, R.under);
   yamanoteMats.bogie = atlasRegionTex(atlas, R.bogie);
+  yamanoteMats.ac = atlasRegionTex(atlas, R.ac);
+  yamanoteMats.roof = makeRoofTex(atlas.image);
   yamanoteMats.side1Open = makeOpenSideTex(atlas.image, R.side1);
   yamanoteMats.side2Open = makeOpenSideTex(atlas.image, R.side2);
 
-  // trains are configured up front but their materials reference
-  // yamanoteMats — rebuild them now that the atlas is ready
   for (const t of trains) {
     scene.remove(t.group);
     const fresh = buildTrain(t.typeKey);
@@ -1261,9 +1557,10 @@ new THREE.TextureLoader().load(atlasData, (atlas) => {
     if (t.group.visible) placeCars(t);
   }
   startTrains();
+  setTrainDetail(qualities[currentQuality].detail);
 });
 
-applyQuality(likelyLowEnd ? 'med' : 'high');
+applyQuality(currentQuality);
 
 const clock = new THREE.Clock();
 function animate() {
@@ -1271,6 +1568,7 @@ function animate() {
   for (const t of trains) updateTrain(t, dt);
   updateSignals();
   updateDayNight(dt);
+  updateFades(dt);
   if (camAnim) {
     camAnim.k += dt / camAnim.dur;
     const e = ease(Math.min(camAnim.k, 1));
