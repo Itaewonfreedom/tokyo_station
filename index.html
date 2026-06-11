@@ -1,0 +1,988 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+<title>도쿄역 철도 시뮬레이터 — Tokyo Station Rail Yard</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000;
+    font-family: 'Apple SD Gothic Neo', 'Segoe UI', 'Malgun Gothic', sans-serif; }
+  #app { width: 100%; height: 100%; }
+  canvas { display: block; touch-action: none; }
+
+  /* ---------- start overlay ---------- */
+  #overlay {
+    position: fixed; inset: 0; z-index: 20;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: radial-gradient(ellipse at center, rgba(20,30,55,.92), rgba(5,8,18,.97));
+    color: #fff; text-align: center; cursor: pointer; transition: opacity .5s;
+  }
+  #overlay.hidden { opacity: 0; pointer-events: none; }
+  #overlay .emoji { font-size: 4rem; margin-bottom: .6rem; animation: choo 2.4s ease-in-out infinite; }
+  @keyframes choo { 0%,100% { transform: translateX(-18px); } 50% { transform: translateX(18px); } }
+  #overlay h1 { font-size: 2rem; margin-bottom: .3rem; letter-spacing: .05em; }
+  #overlay h2 { font-size: .95rem; font-weight: 400; color: #9fb4d8; margin-bottom: 1.6rem; }
+  #overlay .desc { font-size: .85rem; color: #8294b8; line-height: 1.7; margin-bottom: 2rem; }
+  #overlay .start {
+    font-size: 1.25rem; padding: .9rem 3rem; border-radius: 999px; color: #fff;
+    background: linear-gradient(135deg, #79c143, #4e9a2e);
+    border: 2px solid #a5e07a; box-shadow: 0 0 35px rgba(121,193,67,.5);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse { 50% { box-shadow: 0 0 60px rgba(121,193,67,.9); transform: scale(1.04); } }
+
+  /* ---------- UI buttons ---------- */
+  .btn-col {
+    position: fixed; right: 12px; top: 50%; transform: translateY(-50%); z-index: 10;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .ui-btn {
+    width: 58px; height: 58px; border-radius: 16px; border: 1px solid rgba(255,255,255,.25);
+    background: rgba(15,22,40,.72); backdrop-filter: blur(8px);
+    color: #fff; font-size: 26px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 4px 14px rgba(0,0,0,.4); transition: transform .12s, background .2s;
+    user-select: none;
+  }
+  .ui-btn:active { transform: scale(.9); }
+  .ui-btn.active { background: rgba(121,193,67,.55); border-color: #a5e07a; }
+  .ui-btn small { position: absolute; bottom: 3px; font-size: 8px; color: rgba(255,255,255,.75); }
+  .ui-btn { position: relative; }
+
+  #quality {
+    position: fixed; bottom: 14px; right: 12px; z-index: 10;
+    display: flex; border-radius: 12px; overflow: hidden;
+    border: 1px solid rgba(255,255,255,.25); background: rgba(15,22,40,.72); backdrop-filter: blur(8px);
+  }
+  #quality button {
+    border: none; background: transparent; color: #aab8d5; font-size: .8rem;
+    padding: .6rem 1rem; cursor: pointer; transition: background .2s;
+  }
+  #quality button.active { background: rgba(121,193,67,.55); color: #fff; font-weight: 700; }
+
+  #hud {
+    position: fixed; left: 14px; top: 12px; z-index: 10; pointer-events: none; user-select: none;
+    color: rgba(255,255,255,.92); text-shadow: 0 1px 4px rgba(0,0,0,.8);
+  }
+  #hud .title { font-size: 1rem; font-weight: 700; letter-spacing: .05em; }
+  #hud .sub { font-size: .75rem; color: rgba(190,205,235,.9); margin-top: 3px; }
+
+  #toast {
+    position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%); z-index: 10;
+    background: rgba(15,22,40,.85); color: #fff; padding: .5rem 1.2rem; border-radius: 999px;
+    font-size: .85rem; opacity: 0; transition: opacity .3s; pointer-events: none;
+    border: 1px solid rgba(255,255,255,.2);
+  }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="hud">
+  <div class="title">🚉 도쿄역 철도 시뮬레이터</div>
+  <div class="sub" id="hud-sub">화면을 드래그해서 둘러보세요 · 기차를 터치하면 빵!</div>
+</div>
+
+<div class="btn-col">
+  <button class="ui-btn" id="btn-follow" title="기차 따라가기">🚆<small>따라가기</small></button>
+  <button class="ui-btn" id="btn-sat"    title="위성 뷰">🛰️<small>위성</small></button>
+  <button class="ui-btn" id="btn-plat"   title="승강장 뷰">🚉<small>승강장</small></button>
+  <button class="ui-btn" id="btn-wide"   title="전경 뷰">🏙️<small>전경</small></button>
+  <button class="ui-btn" id="btn-night"  title="낮/밤">🌙<small>낮/밤</small></button>
+  <button class="ui-btn" id="btn-sound"  title="소리">🔇<small>소리</small></button>
+</div>
+
+<div id="quality">
+  <button data-q="low">저사양</button>
+  <button data-q="med">보통</button>
+  <button data-q="high">고화질</button>
+</div>
+
+<div id="toast"></div>
+
+<div id="overlay">
+  <div class="emoji">🚃🚃🚃</div>
+  <h1>도쿄역 기차 구경</h1>
+  <h2>TOKYO STATION RAIL YARD SIMULATOR</h2>
+  <div class="desc">
+    야마노테선 · 케이힌토호쿠선 · 츄오선 · 신칸센이<br>
+    도쿄역을 쉴 새 없이 드나들어요.<br>
+    🚆 버튼으로 기차를 따라가고, 기차를 터치하면 경적이 울려요!
+  </div>
+  <div class="start">▶ 출발합니다!</div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/* ================================================================
+   Renderer / Scene / Camera
+================================================================ */
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+document.getElementById('app').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.5, 1200);
+camera.position.set(-80, 45, 150);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 4, -10);
+controls.enableDamping = true;
+controls.dampingFactor = 0.07;
+controls.maxPolarAngle = Math.PI * 0.495;
+controls.minDistance = 6;
+controls.maxDistance = 450;
+
+/* ================================================================
+   Yard layout constants (based on the satellite photo:
+   Marunouchi brick station on the west, parallel tracks
+   with teal platform roofs, Shinkansen on the east side)
+================================================================ */
+const YARD_LEN = 420;            // track length
+const STOP_Z = 0;                // where trains stop (platform center)
+const TRACK_XS  = [-14.2, -9.8, -6.2, -1.8, 1.8, 6.2, 9.8, 14.2, 21.8, 26.2];
+const PLATFORM_XS = [-12, -4, 4, 12, 24];
+const PLATFORM_LEN = 210;
+
+/* ================================================================
+   Procedural textures (no external assets)
+================================================================ */
+function canvasTex(w, h, draw, rx = 1, ry = 1) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(rx, ry);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
+}
+
+// red brick for the Marunouchi building
+const brickTex = canvasTex(256, 256, (g, w, h) => {
+  g.fillStyle = '#8c3a2b'; g.fillRect(0, 0, w, h);
+  const bh = 16, bw = 32;
+  for (let y = 0; y < h / bh; y++)
+    for (let x = -1; x < w / bw + 1; x++) {
+      const off = (y % 2) * bw / 2, s = 0.85 + Math.random() * 0.3;
+      g.fillStyle = `rgb(${145*s|0},${62*s|0},${45*s|0})`;
+      g.fillRect(x * bw + off + 1, y * bh + 1, bw - 2, bh - 2);
+    }
+}, 14, 3);
+
+// city building windows: day + night(lit) pair
+function buildingTex(lit) {
+  return canvasTex(128, 256, (g, w, h) => {
+    g.fillStyle = lit ? '#0b1120' : '#9fb6c8'; g.fillRect(0, 0, w, h);
+    for (let y = 8; y < h - 16; y += 22)
+      for (let x = 6; x < w - 10; x += 16) {
+        if (lit) {
+          g.fillStyle = Math.random() < 0.5 ? `rgba(255,${200+Math.random()*55|0},120,.95)` : '#101826';
+        } else {
+          const v = 0.7 + Math.random() * 0.35;
+          g.fillStyle = `rgb(${135*v|0},${165*v|0},${190*v|0})`;
+        }
+        g.fillRect(x, y, 10, 14);
+      }
+  });
+}
+const bldgDayTex = buildingTex(false);
+const bldgNightTex = buildingTex(true);
+
+/* ---------- train side textures ----------
+   E235 Yamanote style: silver body, dark window band,
+   colored doors + thin colored stripe. doorsOpen variant swaps in. */
+function commuterSide(colorHex, doorsOpen) {
+  return canvasTex(1024, 176, (g, w, h) => {
+    const grad = g.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, '#e3e6e8'); grad.addColorStop(.5, '#c2c7cb'); grad.addColorStop(1, '#aeb3b8');
+    g.fillStyle = grad; g.fillRect(0, 0, w, h);
+    // colored stripe along the top (Yamanote = yellow-green)
+    g.fillStyle = colorHex; g.fillRect(0, 6, w, 14);
+    // window band
+    g.fillStyle = '#1d2530';
+    g.fillRect(0, 42, w, 44);
+    g.fillStyle = 'rgba(140,180,220,.25)';
+    g.fillRect(0, 44, w, 12);
+    // 4 doors per car
+    for (let i = 0; i < 4; i++) {
+      const dx = 70 + i * 240;
+      if (doorsOpen) {
+        g.fillStyle = '#11161d'; g.fillRect(dx, 28, 92, h - 40);
+        g.fillStyle = 'rgba(255,230,170,.45)'; g.fillRect(dx + 6, 34, 80, h - 56); // warm interior light
+      } else {
+        g.fillStyle = colorHex; g.fillRect(dx, 28, 92, h - 40);
+        g.fillStyle = '#252a30'; g.fillRect(dx + 44, 28, 4, h - 40); // door split line
+        g.fillStyle = '#1d2530'; g.fillRect(dx + 10, 44, 30, 38); g.fillRect(dx + 52, 44, 30, 38);
+      }
+    }
+    // under-floor equipment shading
+    g.fillStyle = 'rgba(40,44,50,.85)'; g.fillRect(0, h - 14, w, 14);
+  });
+}
+
+// E235 front face: black windshield panel + green dotted lower area
+function commuterFace(colorHex) {
+  return canvasTex(256, 256, (g, w, h) => {
+    g.fillStyle = '#d4d7da'; g.fillRect(0, 0, w, h);
+    g.fillStyle = colorHex; g.fillRect(0, 0, w, h * 0.92);
+    // big black face panel
+    g.fillStyle = '#0c0f13';
+    g.beginPath();
+    g.moveTo(28, 18); g.lineTo(w - 28, 18);
+    g.quadraticCurveTo(w - 10, 20, w - 12, 60); g.lineTo(w - 30, 150);
+    g.quadraticCurveTo(w / 2, 168, 30, 150); g.lineTo(12, 60);
+    g.quadraticCurveTo(10, 20, 28, 18); g.fill();
+    // windshield
+    g.fillStyle = '#26303e'; g.fillRect(54, 34, w - 108, 56);
+    g.fillStyle = 'rgba(150,190,230,.3)'; g.fillRect(54, 34, w - 108, 18);
+    // destination sign
+    g.fillStyle = '#0a2a0a'; g.fillRect(w/2 - 34, 98, 68, 18);
+    g.fillStyle = '#9fff7a'; g.font = 'bold 13px sans-serif'; g.textAlign = 'center';
+    g.fillText('東京', w / 2, 112);
+    // dotted gradient on the lower green area (E235 signature)
+    for (let i = 0; i < 260; i++) {
+      const y = 150 + Math.random() * 70;
+      const p = (y - 150) / 70;
+      if (Math.random() < 1 - p * 0.8) {
+        g.fillStyle = 'rgba(10,14,10,.55)';
+        g.beginPath(); g.arc(20 + Math.random() * (w - 40), y, 2.2, 0, 7); g.fill();
+      }
+    }
+    // headlights
+    g.fillStyle = '#fff8e0';
+    g.beginPath(); g.arc(40, h - 36, 12, 0, 7); g.fill();
+    g.beginPath(); g.arc(w - 40, h - 36, 12, 0, 7); g.fill();
+    // skirt
+    g.fillStyle = '#3a3f45'; g.fillRect(0, h - 18, w, 18);
+  });
+}
+
+// Shinkansen side: white with blue stripe, small windows
+function shinkansenSide() {
+  return canvasTex(1024, 176, (g, w, h) => {
+    const grad = g.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, '#ffffff'); grad.addColorStop(.6, '#eef2f5'); grad.addColorStop(1, '#d8dde2');
+    g.fillStyle = grad; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#1565c0'; g.fillRect(0, 52, w, 22);
+    g.fillStyle = '#10151c';
+    for (let x = 40; x < w - 30; x += 64) g.fillRect(x, 36, 26, 14);
+    g.fillStyle = '#9aa1a8'; g.fillRect(0, h - 12, w, 12);
+    // one door per car side
+    g.fillStyle = 'rgba(60,70,80,.45)'; g.fillRect(150, 30, 3, h - 44); g.fillRect(680, 30, 3, h - 44);
+  });
+}
+
+/* ================================================================
+   Sky / lighting / day-night
+================================================================ */
+const hemiLight = new THREE.HemisphereLight(0xbfd6ff, 0x6b6257, 0.9);
+scene.add(hemiLight);
+
+const sun = new THREE.DirectionalLight(0xfff2dd, 2.0);
+sun.position.set(120, 160, 80);
+sun.castShadow = true;
+sun.shadow.camera.left = -240; sun.shadow.camera.right = 240;
+sun.shadow.camera.top = 240; sun.shadow.camera.bottom = -240;
+sun.shadow.camera.far = 600;
+sun.shadow.bias = -0.0006;
+scene.add(sun);
+
+const skyUniforms = {
+  topColor: { value: new THREE.Color(0x3d7ad6) },
+  bottomColor: { value: new THREE.Color(0xcfe4f7) },
+};
+const sky = new THREE.Mesh(
+  new THREE.SphereGeometry(900, 24, 12),
+  new THREE.ShaderMaterial({
+    uniforms: skyUniforms, side: THREE.BackSide, fog: false,
+    vertexShader: `varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.); }`,
+    fragmentShader: `uniform vec3 topColor,bottomColor; varying vec3 vP;
+      void main(){ float h = normalize(vP + vec3(0.,30.,0.)).y;
+      gl_FragColor = vec4(mix(bottomColor, topColor, pow(max(h,0.),0.7)), 1.); }`,
+  })
+);
+scene.add(sky);
+
+const starGeo = new THREE.BufferGeometry();
+{
+  const p = [];
+  for (let i = 0; i < 900; i++) {
+    const a = Math.random() * 6.283, e = Math.random() * 1.3 + 0.12, r = 850;
+    p.push(r * Math.cos(e) * Math.cos(a), r * Math.sin(e), r * Math.cos(e) * Math.sin(a));
+  }
+  starGeo.setAttribute('position', new THREE.Float32BufferAttribute(p, 3));
+}
+const starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 1.5, transparent: true, opacity: 0, sizeAttenuation: false });
+scene.add(new THREE.Points(starGeo, starMat));
+
+const moon = new THREE.Mesh(new THREE.SphereGeometry(18, 20, 20),
+  new THREE.MeshBasicMaterial({ color: 0xfdf6e3, transparent: true, opacity: 0, fog: false }));
+moon.position.set(-320, 460, -480);
+scene.add(moon);
+
+scene.fog = new THREE.Fog(0xcfe4f7, 150, 800);
+
+/* ================================================================
+   Ground, rail yard, platforms
+================================================================ */
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(1000, 1000),
+  new THREE.MeshStandardMaterial({ color: 0x8e9094, roughness: 1 })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = -0.05;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// ballast bed under the whole yard
+const ballast = new THREE.Mesh(
+  new THREE.BoxGeometry(52, 0.3, YARD_LEN + 30),
+  new THREE.MeshStandardMaterial({ color: 0x55514c, roughness: 1 })
+);
+ballast.position.set(6, 0.15, 0);
+ballast.receiveShadow = true;
+scene.add(ballast);
+
+// rails
+const railMat = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, roughness: 0.35, metalness: 0.8 });
+const railGeo = new THREE.BoxGeometry(0.14, 0.18, YARD_LEN);
+for (const x of TRACK_XS) {
+  for (const dx of [-0.72, 0.72]) {
+    const r = new THREE.Mesh(railGeo, railMat);
+    r.position.set(x + dx, 0.45, 0);
+    scene.add(r);
+  }
+}
+
+// sleepers/ties — one InstancedMesh = one draw call
+{
+  const tieGeo = new THREE.BoxGeometry(2.1, 0.12, 0.5);
+  const tieMat = new THREE.MeshStandardMaterial({ color: 0x4a4038, roughness: 1 });
+  const per = Math.floor(YARD_LEN / 1.8);
+  const ties = new THREE.InstancedMesh(tieGeo, tieMat, per * TRACK_XS.length);
+  const m = new THREE.Matrix4();
+  let i = 0;
+  for (const x of TRACK_XS)
+    for (let k = 0; k < per; k++) {
+      m.setPosition(x, 0.36, -YARD_LEN / 2 + k * 1.8 + 0.9);
+      ties.setMatrixAt(i++, m);
+    }
+  ties.instanceMatrix.needsUpdate = true;
+  ties.receiveShadow = true;
+  scene.add(ties);
+}
+
+// platforms with the teal roofs seen in the satellite photo
+const platMat = new THREE.MeshStandardMaterial({ color: 0xcec9bd, roughness: 0.95 });
+const roofMat = new THREE.MeshStandardMaterial({ color: 0x3fa896, roughness: 0.7 });
+const roofLightMat = new THREE.MeshStandardMaterial({ color: 0xfff6dd, emissive: 0xffeebb, emissiveIntensity: 0 });
+const yellowMat = new THREE.MeshStandardMaterial({ color: 0xe8c63a, roughness: 0.9 });
+{
+  const pGeo = new THREE.BoxGeometry(3.4, 1.1, PLATFORM_LEN);
+  const rGeo = new THREE.BoxGeometry(4.3, 0.14, PLATFORM_LEN + 4);
+  const lGeo = new THREE.BoxGeometry(0.6, 0.06, PLATFORM_LEN - 8);
+  const yGeo = new THREE.BoxGeometry(0.3, 0.03, PLATFORM_LEN);
+  const pillarGeo = new THREE.CylinderGeometry(0.13, 0.13, 3.9, 8);
+  const pillarMat = new THREE.MeshStandardMaterial({ color: 0x5e6a72, roughness: 0.6, metalness: 0.4 });
+  const nPillars = Math.floor(PLATFORM_LEN / 14);
+  const pillars = new THREE.InstancedMesh(pillarGeo, pillarMat, nPillars * PLATFORM_XS.length);
+  const m = new THREE.Matrix4();
+  let pi = 0;
+  for (const x of PLATFORM_XS) {
+    const p = new THREE.Mesh(pGeo, platMat);
+    p.position.set(x, 0.55, 0); p.castShadow = p.receiveShadow = true; scene.add(p);
+    const roof = new THREE.Mesh(rGeo, roofMat);
+    roof.position.set(x, 5.05, 0); roof.castShadow = true; scene.add(roof);
+    const lights = new THREE.Mesh(lGeo, roofLightMat);
+    lights.position.set(x, 4.95, 0); scene.add(lights);
+    for (const dx of [-1.45, 1.45]) {
+      const yl = new THREE.Mesh(yGeo, yellowMat);
+      yl.position.set(x + dx, 1.12, 0); scene.add(yl);
+    }
+    for (let k = 0; k < nPillars; k++) {
+      m.setPosition(x, 3.05, -PLATFORM_LEN / 2 + 7 + k * 14);
+      pillars.setMatrixAt(pi++, m);
+    }
+  }
+  pillars.instanceMatrix.needsUpdate = true;
+  pillars.castShadow = true;
+  scene.add(pillars);
+}
+
+/* ---------- catenary gantries & wires (hidden on low quality) ---------- */
+const detailGroup = new THREE.Group();
+{
+  const poleGeo = new THREE.CylinderGeometry(0.16, 0.2, 8.6, 6);
+  const beamGeo = new THREE.BoxGeometry(50, 0.35, 0.35);
+  const steelMat = new THREE.MeshStandardMaterial({ color: 0x6c7378, roughness: 0.6, metalness: 0.5 });
+  for (let z = -180; z <= 180; z += 45) {
+    for (const x of [-17.5, 29.5]) {
+      const p = new THREE.Mesh(poleGeo, steelMat);
+      p.position.set(x, 4.3, z); p.castShadow = true; detailGroup.add(p);
+    }
+    const b = new THREE.Mesh(beamGeo, steelMat);
+    b.position.set(6, 8.3, z); detailGroup.add(b);
+  }
+  const wireGeo = new THREE.BoxGeometry(0.05, 0.05, YARD_LEN);
+  const wireMat = new THREE.MeshBasicMaterial({ color: 0x222426 });
+  for (const x of TRACK_XS) {
+    const w = new THREE.Mesh(wireGeo, wireMat);
+    w.position.set(x, 6.3, 0); detailGroup.add(w);
+  }
+}
+scene.add(detailGroup);
+
+/* ================================================================
+   Marunouchi red-brick station building (west side)
+================================================================ */
+const station = new THREE.Group();
+{
+  const brickMat = new THREE.MeshStandardMaterial({ map: brickTex, roughness: 0.85 });
+  const stoneMat = new THREE.MeshStandardMaterial({ color: 0xe6e0d4, roughness: 0.8 });
+  const slateMat = new THREE.MeshStandardMaterial({ color: 0x39424d, roughness: 0.55, metalness: 0.3 });
+  const glowMat = new THREE.MeshStandardMaterial({ color: 0x1a1408, emissive: 0xffc46b, emissiveIntensity: 0 });
+  station.userData.glowMat = glowMat;
+
+  function sBox(w, h, d, mat, x, y, z) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.position.set(x, y, z); m.castShadow = m.receiveShadow = true;
+    station.add(m); return m;
+  }
+  // long wing along Z
+  sBox(10, 12, 190, brickMat, 0, 6, 0);
+  sBox(11, 0.8, 192, stoneMat, 0, 12.4, 0);
+  sBox(12, 2.6, 190, slateMat, 0, 14.1, 0);
+  for (const y of [3.5, 7.5]) sBox(10.2, 0.5, 190.2, stoneMat, 0, y, 0);
+  // center pavilion
+  sBox(13, 16, 24, brickMat, -1, 8, 0);
+  sBox(14, 1, 26, stoneMat, -1, 16.5, 0);
+  const cRoof = new THREE.Mesh(new THREE.ConeGeometry(13, 6, 4), slateMat);
+  cRoof.rotation.y = Math.PI / 4; cRoof.position.set(-1, 20, 0); cRoof.castShadow = true;
+  station.add(cRoof);
+  // north & south dome pavilions
+  for (const sz of [-1, 1]) {
+    const z = sz * 80;
+    sBox(16, 17, 26, brickMat, -1, 8.5, z);
+    sBox(17, 1, 28, stoneMat, -1, 17.5, z);
+    const drum = new THREE.Mesh(new THREE.CylinderGeometry(9.5, 9.5, 4, 8), brickMat);
+    drum.position.set(-1, 20, z); drum.castShadow = true; station.add(drum);
+    const dome = new THREE.Mesh(
+      new THREE.SphereGeometry(9.5, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), slateMat);
+    dome.position.set(-1, 22, z); dome.castShadow = true; station.add(dome);
+  }
+  // window rows facing the tracks (glow at night)
+  const winGeo = new THREE.BoxGeometry(0.2, 2.4, 1.5);
+  for (let k = -9; k <= 9; k++) {
+    const z = k * 8.6;
+    if (Math.abs(z) > 60 && Math.abs(z) < 96) continue;
+    for (const y of [4.6, 9.4]) {
+      const w = new THREE.Mesh(winGeo, glowMat);
+      w.position.set(5.06, y, z); station.add(w);
+    }
+  }
+}
+station.position.set(-40, 0, 0);
+scene.add(station);
+
+/* ================================================================
+   Surrounding office towers (Marunouchi & Yaesu)
+================================================================ */
+const towers = [];
+const cityGroup = new THREE.Group();
+{
+  const spots = [
+    [-85, -90, 26, 95], [-95, -20, 30, 78], [-88, 55, 24, 110], [-110, 120, 32, 70],
+    [-120, -150, 28, 88], [-80, 150, 26, 92],
+    [60, -120, 30, 100], [70, -45, 26, 120], [62, 30, 24, 85], [72, 100, 32, 105],
+    [105, -10, 36, 140], [100, 160, 28, 75], [115, 70, 30, 95], [-130, 30, 26, 60],
+  ];
+  for (const [x, z, w, h] of spots) {
+    const mat = new THREE.MeshStandardMaterial({
+      map: bldgDayTex.clone(), emissiveMap: bldgNightTex, emissive: 0xffffff,
+      emissiveIntensity: 0, roughness: 0.45, metalness: 0.25,
+    });
+    mat.map.repeat.set(Math.max(1, w / 14 | 0), Math.max(2, h / 16 | 0));
+    const t = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), mat);
+    t.position.set(x, h / 2, z);
+    t.castShadow = t.receiveShadow = true;
+    cityGroup.add(t);
+    towers.push(t);
+  }
+}
+scene.add(cityGroup);
+
+/* ================================================================
+   Trains
+================================================================ */
+const CAR_LEN = 19.5, CAR_W = 2.95, CAR_H = 3.2, CAR_GAP = 0.5;
+const carGeo = new THREE.BoxGeometry(CAR_W, CAR_H, CAR_LEN);
+const roofCarMat = new THREE.MeshStandardMaterial({ color: 0xb8bcc0, roughness: 0.6 });
+const underMat = new THREE.MeshStandardMaterial({ color: 0x2b2f34, roughness: 0.9 });
+const bogieGeo = new THREE.BoxGeometry(2.2, 0.75, 2.6);
+const endMat = new THREE.MeshStandardMaterial({ color: 0x9da2a7, roughness: 0.7 });
+
+const trainTypes = {
+  yamanote: {
+    name: '야마노테선 E235',
+    color: '#9bc31c',
+    sideClosed: commuterSide('#9bc31c', false),
+    sideOpen:   commuterSide('#9bc31c', true),
+    face: commuterFace('#9bc31c'),
+    cars: 8, maxSpeed: 21, dwell: 7,
+  },
+  keihin: {
+    name: '케이힌토호쿠선 E233',
+    color: '#21a8e0',
+    sideClosed: commuterSide('#21a8e0', false),
+    sideOpen:   commuterSide('#21a8e0', true),
+    face: commuterFace('#21a8e0'),
+    cars: 8, maxSpeed: 22, dwell: 6,
+  },
+  chuo: {
+    name: '츄오선 E233',
+    color: '#f15a22',
+    sideClosed: commuterSide('#f15a22', false),
+    sideOpen:   commuterSide('#f15a22', true),
+    face: commuterFace('#f15a22'),
+    cars: 8, maxSpeed: 23, dwell: 6,
+  },
+  shinkansen: {
+    name: '도카이도 신칸센',
+    color: '#1565c0',
+    sideClosed: shinkansenSide(),
+    sideOpen:   shinkansenSide(),
+    face: null,
+    cars: 6, maxSpeed: 30, dwell: 9,
+  },
+};
+
+function buildTrain(typeKey) {
+  const T = trainTypes[typeKey];
+  const g = new THREE.Group();
+  const sideMat = new THREE.MeshStandardMaterial({ map: T.sideClosed, roughness: 0.45, metalness: 0.25 });
+  const carLenTotal = T.cars * (CAR_LEN + CAR_GAP) - CAR_GAP;
+  const isShink = typeKey === 'shinkansen';
+
+  for (let i = 0; i < T.cars; i++) {
+    const z = -carLenTotal / 2 + CAR_LEN / 2 + i * (CAR_LEN + CAR_GAP);
+    // box material order: +x, -x, +y, -y, +z, -z
+    const car = new THREE.Mesh(carGeo, [sideMat, sideMat, roofCarMat, underMat, endMat, endMat]);
+    car.position.set(0, 2.55, z);
+    car.castShadow = true;
+    g.add(car);
+    for (const bz of [-6.5, 6.5]) {
+      const b = new THREE.Mesh(bogieGeo, underMat);
+      b.position.set(0, 0.62, z + bz);
+      g.add(b);
+    }
+    // pantographs on a couple of cars
+    if (!isShink && (i === 2 || i === 5)) {
+      const pant = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.08, 0.08), underMat);
+      pant.position.set(0, 5.4, z);
+      g.add(pant);
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(0.07, 1.4, 0.07), underMat);
+      arm.position.set(0, 4.6, z); arm.rotation.x = 0.5;
+      g.add(arm);
+    }
+  }
+
+  // train ends
+  if (isShink) {
+    const noseMat = new THREE.MeshStandardMaterial({ color: 0xf4f7fa, roughness: 0.3, metalness: 0.2 });
+    for (const dir of [-1, 1]) {
+      const nose = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 1.42, 7.5, 12), noseMat);
+      nose.rotation.x = dir * Math.PI / 2;
+      nose.scale.set(1, 1, 0.62);
+      nose.position.set(0, 2.25, dir * (carLenTotal / 2 + 3.4));
+      nose.castShadow = true;
+      g.add(nose);
+    }
+  } else {
+    const faceMat = new THREE.MeshBasicMaterial({ map: T.face });
+    const faceGeo = new THREE.PlaneGeometry(CAR_W, CAR_H);
+    for (const dir of [-1, 1]) {
+      const f = new THREE.Mesh(faceGeo, faceMat);
+      f.position.set(0, 2.55, dir * (carLenTotal / 2 + 0.02));
+      if (dir < 0) f.rotation.y = Math.PI;
+      g.add(f);
+    }
+  }
+
+  // headlight / taillight glows (set per direction later)
+  const lightGeo = new THREE.SphereGeometry(0.14, 8, 8);
+  const heads = [], tails = [];
+  for (const dir of [-1, 1]) {
+    const zEnd = dir * (carLenTotal / 2 + (isShink ? 6.6 : 0.1));
+    for (const sx of [-0.95, 0.95]) {
+      const head = new THREE.Mesh(lightGeo, new THREE.MeshBasicMaterial({ color: 0xfff6d8 }));
+      head.position.set(sx, isShink ? 1.6 : 1.25, zEnd);
+      g.add(head);
+      (dir === 1 ? heads : tails).push(head);
+    }
+  }
+  return { group: g, sideMat, heads, tails, len: carLenTotal, type: T, typeKey };
+}
+
+/* ---------- train controller (state machine) ---------- */
+const trains = [];
+function addTrain(typeKey, trackX, dir, phase) {
+  const t = buildTrain(typeKey);
+  t.dir = dir;
+  t.trackX = trackX;
+  t.state = 'enter';
+  t.speed = t.type.maxSpeed;
+  t.timer = phase;            // initial delay before first entry
+  t.z = -dir * (YARD_LEN / 2 + t.len);
+  if (phase > 0) { t.state = 'wait'; t.group.visible = false; }
+  t.brakeDist = (t.type.maxSpeed * t.type.maxSpeed) / 2.6;
+  // headlights face direction of travel; taillights red
+  const lead = dir === 1 ? t.heads : t.tails;
+  const rear = dir === 1 ? t.tails : t.heads;
+  for (const l of lead) l.material.color.setHex(0xfff6d8);
+  for (const l of rear) { l.material.color.setHex(0xff2a1a); }
+  t.group.position.set(trackX, 0, t.z);
+  scene.add(t.group);
+  trains.push(t);
+  return t;
+}
+
+addTrain('yamanote', -14.2,  1, 0);     // the star — visible right away
+addTrain('yamanote',  -9.8, -1, 9);
+addTrain('keihin',    -6.2,  1, 16);
+addTrain('chuo',       9.8, -1, 5);
+addTrain('shinkansen', 21.8, 1, 12);
+
+// a parked Shinkansen on the far east track (static scenery)
+{
+  const parked = buildTrain('shinkansen');
+  parked.group.position.set(26.2, 0, -60);
+  scene.add(parked.group);
+}
+
+function updateTrain(t, dt) {
+  switch (t.state) {
+    case 'wait':
+      t.timer -= dt;
+      if (t.timer <= 0) {
+        t.state = 'enter';
+        t.z = -t.dir * (YARD_LEN / 2 + t.len);
+        t.speed = t.type.maxSpeed;
+        t.group.visible = true;
+        t.doorBell = false;
+      }
+      break;
+    case 'enter': {
+      const dist = (STOP_Z - t.z) * t.dir;
+      if (dist <= 0.08) {
+        t.z = STOP_Z; t.speed = 0;
+        t.state = 'dwell'; t.timer = t.type.dwell;
+        t.sideMat.map = t.type.sideOpen;
+        sound.arrive();
+      } else {
+        if (dist < t.brakeDist)
+          t.speed = Math.max(1.2, t.type.maxSpeed * Math.sqrt(dist / t.brakeDist));
+        t.z += t.dir * t.speed * dt;
+      }
+      break;
+    }
+    case 'dwell':
+      t.timer -= dt;
+      if (t.timer < 1.4 && !t.doorBell) { t.doorBell = true; sound.doors(); }
+      if (t.timer <= 0) {
+        t.state = 'depart';
+        t.sideMat.map = t.type.sideClosed;
+        sound.jingle();
+      }
+      break;
+    case 'depart':
+      t.speed = Math.min(t.type.maxSpeed, t.speed + 2.2 * dt);
+      t.z += t.dir * t.speed * dt;
+      if (t.z * t.dir > YARD_LEN / 2 + t.len) {
+        t.state = 'wait';
+        t.timer = 5 + Math.random() * 9;
+        t.group.visible = false;
+      }
+      break;
+  }
+  t.group.position.z = t.z;
+}
+
+/* ================================================================
+   Sound (synthesized, no assets) — off by default
+================================================================ */
+const sound = (() => {
+  let ctx = null, on = false;
+  const ensure = () => {
+    if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (ctx.state === 'suspended') ctx.resume();
+  };
+  function tone(freq, delay, dur, type = 'triangle', vol = 0.12) {
+    if (!on) return;
+    ensure();
+    const t0 = ctx.currentTime + delay;
+    const o = ctx.createOscillator(), gn = ctx.createGain();
+    o.type = type; o.frequency.value = freq;
+    gn.gain.setValueAtTime(0, t0);
+    gn.gain.linearRampToValueAtTime(vol, t0 + 0.02);
+    gn.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+    o.connect(gn).connect(ctx.destination);
+    o.start(t0); o.stop(t0 + dur + 0.05);
+  }
+  return {
+    get on() { return on; },
+    toggle() { on = !on; if (on) ensure(); return on; },
+    // departure melody (original short jingle)
+    jingle() { [659, 784, 880, 784, 988, 880].forEach((f, i) => tone(f, i * 0.16, 0.15)); },
+    arrive() { tone(740, 0, 0.25); tone(587, 0.28, 0.35); },
+    doors() { tone(830, 0, 0.1, 'square', 0.07); tone(830, 0.18, 0.1, 'square', 0.07); },
+    horn(high) {
+      tone(high ? 520 : 310, 0, 0.55, 'sawtooth', 0.09);
+      tone(high ? 620 : 370, 0, 0.55, 'sawtooth', 0.09);
+    },
+  };
+})();
+
+/* ================================================================
+   Day / Night
+================================================================ */
+let isNight = false, nightBlend = 0;
+const dayTop = new THREE.Color(0x3d7ad6), dayBot = new THREE.Color(0xcfe4f7);
+const nightTop = new THREE.Color(0x050a18), nightBot = new THREE.Color(0x141d36);
+const dayFog = new THREE.Color(0xcfe4f7), nightFog = new THREE.Color(0x0a0f1d);
+
+function updateDayNight(dt) {
+  const target = isNight ? 1 : 0;
+  nightBlend += (target - nightBlend) * Math.min(1, dt * 1.6);
+  const b = nightBlend;
+  skyUniforms.topColor.value.copy(dayTop).lerp(nightTop, b);
+  skyUniforms.bottomColor.value.copy(dayBot).lerp(nightBot, b);
+  scene.fog.color.copy(dayFog).lerp(nightFog, b);
+  sun.intensity = 2.0 * (1 - b) + 0.08 * b;
+  hemiLight.intensity = 0.9 * (1 - b) + 0.22 * b;
+  starMat.opacity = b * 0.9;
+  moon.material.opacity = b;
+  renderer.toneMappingExposure = 1.0 - b * 0.2;
+  roofLightMat.emissiveIntensity = b * 1.8;
+  station.userData.glowMat.emissiveIntensity = b * 1.5;
+  for (const t of towers) t.material.emissiveIntensity = b * 1.0;
+}
+
+/* ================================================================
+   Quality presets
+================================================================ */
+const qualities = {
+  low:  { px: 0.7, shadows: false, shadowSize: 512,  fogFar: 450, detail: false },
+  med:  { px: 1.0, shadows: true,  shadowSize: 1024, fogFar: 650, detail: true },
+  high: { px: Math.min(devicePixelRatio, 2), shadows: true, shadowSize: 2048, fogFar: 800, detail: true },
+};
+let currentQ = 'high';
+function applyQuality(q) {
+  currentQ = q;
+  const Q = qualities[q];
+  renderer.setPixelRatio(Q.px);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  sun.castShadow = Q.shadows;
+  renderer.shadowMap.enabled = Q.shadows;
+  sun.shadow.mapSize.set(Q.shadowSize, Q.shadowSize);
+  if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
+  scene.traverse(o => { if (o.material) { const ms = Array.isArray(o.material) ? o.material : [o.material]; ms.forEach(mm => mm.needsUpdate = true); } });
+  scene.fog.far = Q.fogFar;
+  detailGroup.visible = Q.detail;
+  document.querySelectorAll('#quality button').forEach(b => b.classList.toggle('active', b.dataset.q === q));
+  toast({ low: '저사양 모드 (그림자 끔)', med: '보통 화질', high: '고화질 모드' }[q]);
+}
+// auto-detect a sensible default
+const likelyLowEnd = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent) || navigator.hardwareConcurrency <= 4;
+
+/* ================================================================
+   Camera views & train following
+================================================================ */
+let camAnim = null;
+let followTrain = null;
+
+function flyTo(pos, target, dur = 1.4) {
+  followTrain = null;
+  controls.enabled = true;
+  camAnim = {
+    p0: camera.position.clone(), t0: controls.target.clone(),
+    p1: new THREE.Vector3(...pos), t1: new THREE.Vector3(...target),
+    k: 0, dur,
+  };
+  setActiveBtn();
+}
+const ease = k => k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+
+const views = {
+  sat:  { pos: [6, 330, 40], target: [6, 0, 0], label: '위성 뷰 🛰️ (제공해주신 사진 구도)' },
+  plat: { pos: [-12, 3.2, 75], target: [-13, 2.6, -40], label: '승강장 뷰 🚉' },
+  wide: { pos: [-95, 50, 150], target: [0, 6, -10], label: '전경 뷰 🏙️' },
+};
+
+let followIdx = 0;
+function followNext() {
+  // prefer trains that are currently visible/moving
+  const candidates = trains.filter(t => t.state !== 'wait');
+  if (!candidates.length) { toast('지금은 들어오는 기차가 없어요. 잠시만요!'); return; }
+  followIdx = (followIdx + 1) % candidates.length;
+  followTrain = candidates[followIdx];
+  camAnim = null;
+  controls.enabled = false;
+  toast(`${followTrain.type.name} 따라가는 중 🚆`);
+  setActiveBtn();
+}
+
+function updateFollow(dt) {
+  if (!followTrain) return;
+  if (followTrain.state === 'wait') {
+    const next = trains.find(t => t.state !== 'wait');
+    if (next) { followTrain = next; toast(`${next.type.name} 따라가는 중 🚆`); }
+    else return;
+  }
+  const t = followTrain;
+  const leadZ = t.z + t.dir * (t.len / 2);
+  const desired = new THREE.Vector3(t.trackX + 13, 6.5, leadZ - t.dir * 16);
+  const look = new THREE.Vector3(t.trackX, 3, leadZ + t.dir * 8);
+  const a = 1 - Math.exp(-3.2 * dt);
+  camera.position.lerp(desired, a);
+  controls.target.lerp(look, a);
+}
+
+/* ================================================================
+   UI wiring
+================================================================ */
+const toastEl = document.getElementById('toast');
+let toastTimer = null;
+function toast(msg) {
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2200);
+}
+
+const btns = {
+  follow: document.getElementById('btn-follow'),
+  sat: document.getElementById('btn-sat'),
+  plat: document.getElementById('btn-plat'),
+  wide: document.getElementById('btn-wide'),
+  night: document.getElementById('btn-night'),
+  sound: document.getElementById('btn-sound'),
+};
+function setActiveBtn() {
+  btns.follow.classList.toggle('active', !!followTrain);
+}
+btns.follow.addEventListener('click', followNext);
+btns.sat.addEventListener('click', () => { flyTo(views.sat.pos, views.sat.target); toast(views.sat.label); });
+btns.plat.addEventListener('click', () => { flyTo(views.plat.pos, views.plat.target); toast(views.plat.label); });
+btns.wide.addEventListener('click', () => { flyTo(views.wide.pos, views.wide.target); toast(views.wide.label); });
+btns.night.addEventListener('click', () => {
+  isNight = !isNight;
+  btns.night.firstChild.textContent = isNight ? '☀️' : '🌙';
+  toast(isNight ? '밤이 되었어요 🌙' : '아침이 밝았어요 ☀️');
+});
+btns.sound.addEventListener('click', () => {
+  const on = sound.toggle();
+  btns.sound.firstChild.textContent = on ? '🔊' : '🔇';
+  toast(on ? '소리 켜짐 — 기차를 터치해보세요!' : '소리 꺼짐');
+  if (on) sound.jingle();
+});
+document.querySelectorAll('#quality button').forEach(b =>
+  b.addEventListener('click', () => applyQuality(b.dataset.q)));
+
+document.addEventListener('keydown', e => {
+  if (e.code === 'KeyT') btns.night.click();
+  if (e.code === 'KeyF') followNext();
+  if (e.code === 'Digit1') btns.wide.click();
+  if (e.code === 'Digit2') btns.sat.click();
+  if (e.code === 'Digit3') btns.plat.click();
+});
+
+/* ---------- tap a train → horn ---------- */
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+let downPos = null, dragged = false;
+
+renderer.domElement.addEventListener('pointerdown', e => {
+  downPos = [e.clientX, e.clientY];
+  dragged = false;
+});
+renderer.domElement.addEventListener('pointermove', e => {
+  if (downPos && Math.hypot(e.clientX - downPos[0], e.clientY - downPos[1]) > 8) {
+    dragged = true;
+    if (followTrain) { followTrain = null; controls.enabled = true; setActiveBtn(); }
+  }
+});
+renderer.domElement.addEventListener('pointerup', e => {
+  if (!downPos || dragged) { downPos = null; return; }
+  downPos = null;
+  pointer.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
+  raycaster.setFromCamera(pointer, camera);
+  for (const t of trains) {
+    if (!t.group.visible) continue;
+    if (raycaster.intersectObject(t.group, true).length) {
+      sound.horn(t.typeKey === 'shinkansen');
+      toast(`${t.type.name} 빵빵! 🚆💨`);
+      return;
+    }
+  }
+});
+
+/* ---------- start overlay ---------- */
+const overlay = document.getElementById('overlay');
+overlay.addEventListener('click', () => {
+  overlay.classList.add('hidden');
+  flyTo(views.wide.pos, views.wide.target, 2.2);
+}, { once: true });
+
+/* ================================================================
+   Main loop
+================================================================ */
+applyQuality(likelyLowEnd ? 'med' : 'high');
+
+const clock = new THREE.Clock();
+function animate() {
+  const dt = Math.min(clock.getDelta(), 0.05);
+
+  for (const t of trains) updateTrain(t, dt);
+  updateDayNight(dt);
+
+  if (camAnim) {
+    camAnim.k += dt / camAnim.dur;
+    const e = ease(Math.min(camAnim.k, 1));
+    camera.position.lerpVectors(camAnim.p0, camAnim.p1, e);
+    controls.target.lerpVectors(camAnim.t0, camAnim.t1, e);
+    if (camAnim.k >= 1) camAnim = null;
+  }
+  updateFollow(dt);
+  controls.update();
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(animate);
+}
+animate();
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>
