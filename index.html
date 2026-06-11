@@ -162,22 +162,21 @@ const PLATFORM_LEN = 210;
 const LADDER_CLEAR = 105;
 const GAUGE = 0.72;
 
-/* Real Tokyo Station layout, west → east (from the track map):
-   Chuo rapid (terminal, buffers south) | Keihin-Tohoku + Yamanote ×4 |
-   Ueno-Tokyo Line (Tokaido main) ×2 | Tokaido Shinkansen (terminal,
-   buffers north) | Tohoku Shinkansen (terminal, buffers south).
-   North and south throats carry different line bundles. */
+/* Real Tokyo Station layout, west → east. In the station zone the
+   tracks SPREAD APART around each island platform (±3.4m from the
+   platform centreline) so the yard bulges into the lens shape seen in
+   the satellite photo, then sweeps back into slim corridors. A gentle
+   global S-bend curves the whole alignment so nothing is ruler-straight. */
 const LINES_X = {
-  CH1: -23.0, CH2: -18.6,                 // 中央線快速 (terminal, enters from N)
-  KA: -14.2, YA: -9.8, YB: -5.4, KB: -1.0, // 京浜東北 / 山手 loops (through)
-  UTN: 3.4, UTS: 7.8,                     // 上野東京ライン/東海道本線 (through)
-  TKS1: 14.0, TKS2: 18.4, TKP: 22.8,      // 東海道新幹線 (terminal, enters from S)
-  THS1: 27.2, THS2: 31.6,                 // 東北新幹線 (terminal, enters from N)
+  CH1: -27.0, CH2: -20.2,                  // 中央線快速 (terminal, enters from N)
+  KA: -16.0, YA: -9.2, YB: -5.0, KB: 1.8,  // 京浜東北 / 山手 loops (through)
+  UTN: 6.0, UTS: 12.8,                     // 上野東京ライン (through)
+  TKS1: 17.8, TKS2: 24.6, TKP: 31.4,       // 東海道新幹線 (terminal, enters from S)
+  THS1: 36.0, THS2: 42.8,                  // 東北新幹線 (terminal, enters from N)
 };
 
-// throat squeeze: beyond |z|=205 the lines sweep into slim corridors.
-// N/S targets differ because each side carries a different bundle.
-const SQ_Z0 = 205, SQ_Z1 = 345;
+// throat squeeze: beyond |z|=135 the lines sweep into slim corridors
+const SQ_Z0 = 135, SQ_Z1 = 335;
 const SQUEEZE = {
   CH1: { N: -15.8, S: null }, CH2: { N: -11.4, S: null },
   KA:  { N: -7.0,  S: -11.4 }, YA: { N: -2.6, S: -7.0 },
@@ -186,8 +185,6 @@ const SQUEEZE = {
   TKS1:{ N: null,  S: 15.0 },  TKS2:{ N: null, S: 19.4 },
   THS1:{ N: 19.4,  S: null },  THS2:{ N: 23.8, S: null },
 };
-// line types: T = through, N = north-only (buffer at z=+118),
-// S = south-only (buffer at z=-118)
 const LINE_DEFS = {
   CH1: 'N', CH2: 'N',
   KA: 'T', YA: 'T', YB: 'T', KB: 'T', UTN: 'T', UTS: 'T',
@@ -196,37 +193,41 @@ const LINE_DEFS = {
 const BUFFER_Z = 118;
 
 const PLATFORMS = [
-  { x: -20.8 }, { x: -12 }, { x: -3.2 }, { x: 5.6 },
-  { x: 16.2 }, { x: 20.6 }, { x: 29.4 },
+  { x: -23.6 }, { x: -12.6 }, { x: -1.6 }, { x: 9.4 },
+  { x: 21.2 }, { x: 28.0 }, { x: 39.4 },
 ];
 
 const smooth = k => k * k * (3 - 2 * k);
 const lerp = (a, b, k) => a + (b - a) * k;
 
-// x of a line at signed z (terminal lines stay at their yard x on the
-// side where they end at buffers)
+// global S-bend across the whole site (like the satellite alignment)
+const BEND_AMP = 18;
+const bendAt = z => BEND_AMP * (smooth((z + Z_END) / (2 * Z_END)) * 2 - 1);
+
+// x of a line at signed z (squeeze + global bend)
 function lineXAt(line, z) {
-  const x0 = LINES_X[line];
+  let x = LINES_X[line];
   const sq = SQUEEZE[line];
-  if (!sq) return x0;
-  const to = z < 0 ? sq.N : sq.S;
-  if (to == null) return x0;
-  const az = Math.abs(z);
-  if (az <= SQ_Z0) return x0;
-  if (az >= SQ_Z1) return to;
-  return lerp(x0, to, smooth((az - SQ_Z0) / (SQ_Z1 - SQ_Z0)));
+  if (sq) {
+    const to = z < 0 ? sq.N : sq.S;
+    if (to != null) {
+      const az = Math.abs(z);
+      if (az >= SQ_Z1) x = to;
+      else if (az > SQ_Z0) x = lerp(x, to, smooth((az - SQ_Z0) / (SQ_Z1 - SQ_Z0)));
+    }
+  }
+  return x + bendAt(z);
 }
 
-// outer edges of the rail corridor (drives ballast, gantries, city).
-// South of the station the Chuo & Tohoku-Shinkansen tracks are gone,
-// so the south throat is narrower than the north one.
+// outer edges of the rail corridor (drives ballast, gantries, city)
 function corridorEdges(z) {
   if (z < 0)
     return { left: lineXAt('CH1', z) - 3.2, right: lineXAt('THS2', z) + 3.2 };
+  // south of the station the Chuo & Tohoku-Shinkansen tracks are gone
   const k = smooth(Math.min(1, Math.max(0, (z - 120) / 70)));
   return {
-    left: lerp(-26.2, lineXAt('KA', z) - 3.2, k),
-    right: lerp(34.8, lineXAt('TKS2', z) + 3.2, k),
+    left: lerp(lineXAt('CH1', z) - 3.2, lineXAt('KA', z) - 3.2, k),
+    right: lerp(lineXAt('THS2', z) + 3.2, lineXAt('TKS2', z) + 3.2, k),
   };
 }
 
@@ -784,44 +785,37 @@ const tieMatrices = [];
 const _m4 = new THREE.Matrix4();
 const _eu = new THREE.Euler();
 
-function straightRails(x, z0, z1) {
-  const len = z1 - z0, zc = (z0 + z1) / 2;
-  const geo = new THREE.BoxGeometry(0.14, 0.18, len);
-  for (const dx of [-GAUGE, GAUGE]) {
-    const r = new THREE.Mesh(geo, railMat);
-    r.position.set(x + dx, 0.45, zc);
-    scene.add(r);
-  }
-  for (let z = z0 + 0.9; z < z1; z += 1.8) {
-    _m4.makeTranslation(x, 0.36, z);
-    tieMatrices.push(_m4.clone());
-  }
-}
-
-function curveRails(x0, x1, z0, z1, sideSign) {
-  const n = Math.max(22, Math.ceil((z1 - z0) / 3));
+// every rail is laid by sampling an x(z) path — nothing is forced
+// straight, so the global bend and the yard bulge flow through all of it
+function railPath(xFn, z0, z1) {
+  const n = Math.max(8, Math.ceil((z1 - z0) / 3));
   for (const off of [-GAUGE, GAUGE]) {
     const pts = [];
     for (let i = 0; i <= n; i++) {
-      const az = z0 + (z1 - z0) * (i / n);
-      const x = x0 + (x1 - x0) * smooth((az - z0) / (z1 - z0));
-      pts.push(new THREE.Vector3(x + off, 0.45, sideSign * az));
+      const z = z0 + (z1 - z0) * (i / n);
+      pts.push(new THREE.Vector3(xFn(z) + off, 0.45, z));
     }
     const tube = new THREE.Mesh(
-      new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), n * 2, 0.085, 5, false),
+      new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), n, 0.085, 5, false),
       railMat
     );
     scene.add(tube);
   }
-  for (let az = z0 + 0.9; az < z1; az += 1.8) {
-    const k = (az - z0) / (z1 - z0);
-    const x = x0 + (x1 - x0) * smooth(k);
-    const x2 = x0 + (x1 - x0) * smooth(Math.min(1, k + 0.04));
-    _eu.set(0, Math.atan2(x2 - x, sideSign * (z1 - z0) * 0.04), 0);
+  for (let z = z0 + 0.9; z < z1; z += 1.8) {
+    const x = xFn(z);
+    _eu.set(0, Math.atan2(xFn(z + 0.6) - x, 0.6), 0);
     _m4.makeRotationFromEuler(_eu);
-    _m4.setPosition(x, 0.36, sideSign * az);
+    _m4.setPosition(x, 0.36, z);
     tieMatrices.push(_m4.clone());
   }
+}
+// decorative crossover blending between two line paths
+function crossRails(lineA, lineB, z0, z1, side) {
+  railPath(z => {
+    const az = Math.abs(z);
+    const k = smooth(Math.min(1, Math.max(0, (az - z0) / (z1 - z0))));
+    return lerp(lineXAt(lineA, z), lineXAt(lineB, z), k);
+  }, side < 0 ? -z1 : z0, side < 0 ? -z0 : z1);
 }
 
 // buffer stop at the dead end of a terminal track
@@ -836,36 +830,31 @@ function addBuffer(x, z) {
 
 // lay every line according to its type
 for (const [l, type] of Object.entries(LINE_DEFS)) {
-  const x0 = LINES_X[l], sq = SQUEEZE[l];
+  const xFn = z => lineXAt(l, z);
   if (type === 'T') {
-    straightRails(x0, -SQ_Z0, SQ_Z0);
-    curveRails(x0, sq.N, SQ_Z0, SQ_Z1, -1);
-    curveRails(x0, sq.S, SQ_Z0, SQ_Z1, 1);
-    straightRails(sq.N, -Z_END, -SQ_Z1);
-    straightRails(sq.S, SQ_Z1, Z_END);
+    railPath(xFn, -Z_END, Z_END);
   } else if (type === 'N') {        // ends at a buffer south of the platform
-    straightRails(x0, -SQ_Z0, BUFFER_Z);
-    curveRails(x0, sq.N, SQ_Z0, SQ_Z1, -1);
-    straightRails(sq.N, -Z_END, -SQ_Z1);
-    addBuffer(x0, BUFFER_Z + 0.5);
+    railPath(xFn, -Z_END, BUFFER_Z);
+    addBuffer(lineXAt(l, BUFFER_Z + 0.5), BUFFER_Z + 0.5);
   } else {                          // 'S': ends at a buffer north of the platform
-    straightRails(x0, -BUFFER_Z, SQ_Z0);
-    curveRails(x0, sq.S, SQ_Z0, SQ_Z1, 1);
-    straightRails(sq.S, SQ_Z1, Z_END);
-    addBuffer(x0, -BUFFER_Z - 0.5);
+    railPath(xFn, -BUFFER_Z, Z_END);
+    addBuffer(lineXAt(l, -BUFFER_Z - 0.5), -BUFFER_Z - 0.5);
   }
 }
-// Shinkansen storage track: merges into TKS2 toward the south ladder
-straightRails(LINES_X.TKP, -BUFFER_Z, 115);
-curveRails(LINES_X.TKP, LINES_X.TKS2, 115, 150, 1);
-addBuffer(LINES_X.TKP, -BUFFER_Z - 0.5);
-// decorative scissors crossovers in the throats
-curveRails(LINES_X.KA, LINES_X.YA, 158, 186, -1);
-curveRails(LINES_X.YB, LINES_X.KB, 158, 186, 1);
-curveRails(LINES_X.UTN, LINES_X.UTS, 158, 186, -1);
-curveRails(LINES_X.TKS1, LINES_X.TKS2, 158, 186, 1);
-curveRails(LINES_X.THS1, LINES_X.THS2, 158, 186, -1);
-curveRails(LINES_X.CH1, LINES_X.CH2, 60, 95, -1);
+// Shinkansen storage track (stub siding with buffers at both ends)
+{
+  const xFn = z => LINES_X.TKP + bendAt(z);
+  railPath(xFn, -BUFFER_Z, 115);
+  addBuffer(xFn(-BUFFER_Z - 0.5), -BUFFER_Z - 0.5);
+  addBuffer(xFn(115.5), 115.5);
+}
+// decorative scissors crossovers just beyond the platform ends
+crossRails('KA', 'YA', 107, 131, -1);
+crossRails('YB', 'KB', 107, 131, 1);
+crossRails('UTN', 'UTS', 107, 131, -1);
+crossRails('TKS1', 'TKS2', 107, 131, 1);
+crossRails('THS1', 'THS2', 107, 131, -1);
+crossRails('CH1', 'CH2', 60, 95, -1);
 
 {
   const ties = new THREE.InstancedMesh(tieGeo, tieMat, tieMatrices.length);
@@ -879,47 +868,122 @@ curveRails(LINES_X.CH1, LINES_X.CH2, 60, 95, -1);
    Platforms — long arched roofs in mint/white like the photo
 ================================================================ */
 const roofLightMat = new THREE.MeshStandardMaterial({ color: 0xfff6dd, emissive: 0xffeebb, emissiveIntensity: 0 });
+// sweeps a cross-section profile along a curved centreline x(z)
+function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25) {
+  const rows = Math.max(4, Math.ceil((z1 - z0) / 5));
+  const np = profile.length;
+  const pos = [], uv = [], idx = [];
+  for (let i = 0; i <= rows; i++) {
+    const z = z0 + (z1 - z0) * (i / rows);
+    const cx = cxFn(z);
+    for (let p = 0; p < np; p++) {
+      pos.push(cx + profile[p][0], profile[p][1], z);
+      uv.push(p / (np - 1), z * vScale);
+    }
+    if (i > 0) {
+      const a = (i - 1) * np, b = i * np;
+      for (let p = 0; p < np - 1; p++)
+        idx.push(a + p, b + p, a + p + 1, a + p + 1, b + p, b + p + 1);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.castShadow = mesh.receiveShadow = true;
+  scene.add(mesh);
+  return mesh;
+}
 {
-  const platMat = new THREE.MeshStandardMaterial({ map: platformTex, roughness: 0.95 });
+  const platMat = new THREE.MeshStandardMaterial({ map: platformTex, roughness: 0.95, side: THREE.DoubleSide });
   const yellowMat = new THREE.MeshStandardMaterial({ color: 0xe8c63a, roughness: 0.9 });
   const roofColors = [0xbfe0d6, 0xe8e6df, 0x9fc8bd, 0xdfe3e4, 0x8fb8ac];
-  const pGeo = new THREE.BoxGeometry(3.4, 1.1, PLATFORM_LEN);
-  const lGeo = new THREE.BoxGeometry(0.6, 0.06, PLATFORM_LEN - 8);
-  const yGeo = new THREE.BoxGeometry(0.3, 0.03, PLATFORM_LEN);
-  // arched roof: open cylinder segment, chord = 4.6m, peak y=5.6
+  // arched roof profile: chord 4.6m, peak y=5.6
   const R = 5, HALF = Math.asin(2.3 / R);
-  const archGeo = new THREE.CylinderGeometry(R, R, PLATFORM_LEN + 6, 16, 1, true, Math.PI - HALF, HALF * 2);
+  const archProfile = [];
+  for (let i = 0; i <= 16; i++) {
+    const a = -HALF + (2 * HALF) * (i / 16);
+    archProfile.push([R * Math.sin(a), 0.6 + R * Math.cos(a)]);
+  }
+  const deckProfile = [[-1.7, 0], [-1.7, 1.1], [1.7, 1.1], [1.7, 0]];
   const pillarGeo = new THREE.CylinderGeometry(0.13, 0.13, 3.9, 8);
   const pillarMat = new THREE.MeshStandardMaterial({ color: 0x5e6a72, roughness: 0.6, metalness: 0.4 });
   const nPillars = Math.floor(PLATFORM_LEN / 14);
   const pillars = new THREE.InstancedMesh(pillarGeo, pillarMat, nPillars * PLATFORMS.length);
   const m = new THREE.Matrix4();
   let pi = 0;
+  const zP0 = -PLATFORM_LEN / 2, zP1 = PLATFORM_LEN / 2;
   PLATFORMS.forEach(({ x }, i) => {
-    const p = new THREE.Mesh(pGeo, platMat);
-    p.position.set(x, 0.55, 0); p.castShadow = p.receiveShadow = true; scene.add(p);
+    const cx = z => x + bendAt(z);    // platforms follow the curved alignment
+    sweepProfile(cx, zP0, zP1, deckProfile, platMat);
     const archMat = new THREE.MeshStandardMaterial({
       color: roofColors[i % roofColors.length], roughness: 0.65, side: THREE.DoubleSide });
-    const roof = new THREE.Mesh(archGeo, archMat);
-    roof.rotation.x = Math.PI / 2;
-    roof.position.set(x, 5.6 - R, 0);
-    roof.castShadow = true;
-    scene.add(roof);
+    const roof = sweepProfile(cx, zP0 - 3, zP1 + 3, archProfile, archMat);
     registerFadeable(roof);
-    const lights = new THREE.Mesh(lGeo, roofLightMat);
-    lights.position.set(x, 4.9, 0); scene.add(lights);
-    for (const dx of [-1.45, 1.45]) {
-      const yl = new THREE.Mesh(yGeo, yellowMat);
-      yl.position.set(x + dx, 1.12, 0); scene.add(yl);
-    }
+    sweepProfile(cx, zP0 + 4, zP1 - 4, [[-0.3, 4.9], [0.3, 4.9]], roofLightMat);
+    sweepProfile(cx, zP0, zP1, [[-1.6, 1.115], [-1.3, 1.115]], yellowMat);
+    sweepProfile(cx, zP0, zP1, [[1.3, 1.115], [1.6, 1.115]], yellowMat);
     for (let k = 0; k < nPillars; k++) {
-      m.makeTranslation(x, 3.05, -PLATFORM_LEN / 2 + 7 + k * 14);
+      const z = zP0 + 7 + k * 14;
+      m.makeTranslation(cx(z), 3.05, z);
       pillars.setMatrixAt(pi++, m);
     }
   });
   pillars.instanceMatrix.needsUpdate = true;
   pillars.castShadow = true;
   scene.add(pillars);
+}
+
+/* ---------- Marunouchi park: lawns, paths and trees in front of the
+   old brick station, like the satellite photo ---------- */
+{
+  const park = new THREE.Group();
+  const lawnMat = new THREE.MeshStandardMaterial({ color: 0x6fae5a, roughness: 1 });
+  const pathMat = new THREE.MeshStandardMaterial({ color: 0xc9c2b4, roughness: 1 });
+  // central axis avenue (Gyoko-dori) leading to the station front
+  const avenue = new THREE.Mesh(new THREE.BoxGeometry(30, 0.06, 12), pathMat);
+  avenue.position.set(-69, 0.03, 0);
+  avenue.receiveShadow = true;
+  park.add(avenue);
+  // lawn panels in a 2×3 grid split by walking paths
+  for (const sz of [-1, 1]) {
+    for (let r = 0; r < 3; r++) {
+      const lawn = new THREE.Mesh(new THREE.BoxGeometry(26, 0.05, 24), lawnMat);
+      lawn.position.set(-72 + r * 1.5, 0.025, sz * (10 + 14 + r * 26));
+      lawn.scale.x = 1 - r * 0.08;
+      lawn.receiveShadow = true;
+      park.add(lawn);
+    }
+  }
+  // tree rings around the lawns (instanced trunks + crowns)
+  const rng = (() => { let s = 424242; return () => (s = s * 16807 % 2147483647) / 2147483647; })();
+  const spots = [];
+  for (let i = 0; i < 54; i++) {
+    const sz = i % 2 ? 1 : -1;
+    spots.push([-84 + rng() * 32, sz * (16 + rng() * 86)]);
+  }
+  const trunkGeo = new THREE.CylinderGeometry(0.14, 0.2, 1.8, 6);
+  const crownGeo = new THREE.SphereGeometry(1.5, 8, 6);
+  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5a4634, roughness: 1 });
+  const crownMat = new THREE.MeshStandardMaterial({ color: 0x4d7e42, roughness: 0.95 });
+  const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, spots.length);
+  const crowns = new THREE.InstancedMesh(crownGeo, crownMat, spots.length);
+  const tm = new THREE.Matrix4();
+  spots.forEach(([px, pz], i) => {
+    tm.makeTranslation(px, 0.9, pz);
+    trunks.setMatrixAt(i, tm);
+    const s = 0.8 + rng() * 0.5;
+    tm.makeScale(s, s * (0.85 + rng() * 0.3), s);
+    tm.setPosition(px, 1.8 + s * 0.9, pz);
+    crowns.setMatrixAt(i, tm);
+  });
+  trunks.instanceMatrix.needsUpdate = true;
+  crowns.instanceMatrix.needsUpdate = true;
+  crowns.castShadow = true;
+  park.add(trunks, crowns);
+  scene.add(park);
 }
 
 /* ---------- catenary: gantries follow the funnel, wires follow lines ---------- */
@@ -958,8 +1022,14 @@ const detailGroup = new THREE.Group();
     else wireAlong(l, -BUFFER_Z, Z_END);
   }
   {
-    const w = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 235), wireMat);
-    w.position.set(LINES_X.TKP, 6.3, 0); detailGroup.add(w);
+    const pts = [];
+    for (let z = -BUFFER_Z; z <= 115; z += 12)
+      pts.push(new THREE.Vector3(LINES_X.TKP + bendAt(z), 6.3, z));
+    const tube = new THREE.Mesh(
+      new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), pts.length * 2, 0.03, 4, false),
+      wireMat
+    );
+    detailGroup.add(tube);
   }
 }
 scene.add(detailGroup);
@@ -980,9 +1050,9 @@ const signals = [];
     else specs.push([l, 'S']);
   }
   for (const [line, side] of specs) {
-    const lx = LINES_X[line];
     {
       const z = side === 'N' ? -198 : 198;
+      const lx = lineXAt(line, z);
       const g = new THREE.Group();
       const pole = new THREE.Mesh(poleGeo, poleMat);
       pole.position.y = 2.1; g.add(pole);
@@ -1044,7 +1114,7 @@ const station = new THREE.Group();
     }
   }
 }
-station.position.set(-40, 0, 0);
+station.position.set(-43, 0, 0);
 scene.add(station);
 registerFadeable(station);
 
@@ -1111,8 +1181,8 @@ const cityFar = new THREE.Group();
       const zC = z + d / 2;
       const edges = corridorEdges(zC);
       let inner = side < 0 ? edges.left - 9 : edges.right + 9;
-      // keep the Marunouchi plaza clear in front of the brick station
-      if (side < 0 && Math.abs(zC) < 125) inner = Math.min(inner, -62);
+      // keep the Marunouchi park & plaza clear in front of the brick station
+      if (side < 0 && Math.abs(zC) < 130) inner = Math.min(inner, -92);
 
       const rows = Math.abs(zC) < 460 ? 2 : 1;
       let xEdge = inner;
@@ -1712,7 +1782,7 @@ const ease = k => k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
 
 const views = {
   sat:  { pos: [6, 330, 40], target: [6, 0, 0], label: '위성 뷰 🛰️' },
-  plat: { pos: [-12, 3.2, 75], target: [-13, 2.6, -40], label: '승강장 뷰 🚉' },
+  plat: { pos: [-11.5, 3.2, 75], target: [-13.5, 2.6, -40], label: '승강장 뷰 🚉' },
   wide: { pos: [-105, 55, 165], target: [0, 6, -10], label: '전경 뷰 🏙️' },
 };
 
@@ -1840,8 +1910,11 @@ overlay.addEventListener('click', () => {
 function startTrains() {
   // N700 stabled on the Shinkansen storage track
   parkedTrain = buildTrain('tokaido');
-  for (let i = 0; i < parkedTrain.cars.length; i++)
-    parkedTrain.cars[i].position.set(LINES_X.TKP, 0, -82 + i * (CAR_LEN + CAR_GAP));
+  for (let i = 0; i < parkedTrain.cars.length; i++) {
+    const z = -82 + i * (CAR_LEN + CAR_GAP);
+    parkedTrain.cars[i].position.set(LINES_X.TKP + bendAt(z), 0, z);
+    parkedTrain.cars[i].rotation.y = Math.atan2(bendAt(z + 1) - bendAt(z), 1);
+  }
   scene.add(parkedTrain.group);
 }
 
