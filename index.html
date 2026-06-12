@@ -168,11 +168,11 @@ const GAUGE = 0.72;
    the satellite photo, then sweeps back into slim corridors. A gentle
    global S-bend curves the whole alignment so nothing is ruler-straight. */
 const LINES_X = {
-  CH1: -27.0, CH2: -20.2,                  // 中央線快速 (terminal, enters from N)
-  KA: -16.0, YA: -9.2, YB: -5.0, KB: 1.8,  // 京浜東北 / 山手 loops (through)
-  UTN: 6.0, UTS: 12.8,                     // 上野東京ライン (through)
-  TKS1: 17.8, TKS2: 24.6, TKP: 31.4,       // 東海道新幹線 (terminal, enters from S)
-  THS1: 36.0, THS2: 42.8,                  // 東北新幹線 (terminal, enters from N)
+  CH1: -32.3, CH2: -23.6,                  // 中央線快速 (terminal, enters from N)
+  KA: -19.4, YA: -10.7, YB: -6.5, KB: 2.2, // 京浜東北 / 山手 loops (through)
+  UTN: 6.4, UTS: 15.1,                     // 上野東京ライン (through)
+  TKS1: 19.7, TKS2: 28.4, TKP: 37.1,       // 東海道新幹線 (terminal, enters from S)
+  THS1: 41.5, THS2: 50.2,                  // 東北新幹線 (terminal, enters from N)
 };
 
 // throat squeeze: beyond |z|=135 the lines sweep into slim corridors
@@ -193,8 +193,8 @@ const LINE_DEFS = {
 const BUFFER_Z = 118;
 
 const PLATFORMS = [
-  { x: -23.6 }, { x: -12.6 }, { x: -1.6 }, { x: 9.4 },
-  { x: 21.2 }, { x: 28.0 }, { x: 39.4 },
+  { x: -27.95 }, { x: -15.05 }, { x: -2.15 }, { x: 10.75 },
+  { x: 24.05 }, { x: 32.75 }, { x: 45.85 },
 ];
 
 const smooth = k => k * k * (3 - 2 * k);
@@ -868,16 +868,18 @@ crossRails('CH1', 'CH2', 60, 95, -1);
    Platforms — long arched roofs in mint/white like the photo
 ================================================================ */
 const roofLightMat = new THREE.MeshStandardMaterial({ color: 0xfff6dd, emissive: 0xffeebb, emissiveIntensity: 0 });
-// sweeps a cross-section profile along a curved centreline x(z)
-function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25) {
+// sweeps a cross-section profile along a curved centreline x(z);
+// scaleFn(z) tapers the profile width so platform ends come to points
+function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null) {
   const rows = Math.max(4, Math.ceil((z1 - z0) / 5));
   const np = profile.length;
   const pos = [], uv = [], idx = [];
   for (let i = 0; i <= rows; i++) {
     const z = z0 + (z1 - z0) * (i / rows);
     const cx = cxFn(z);
+    const s = scaleFn ? scaleFn(z) : 1;
     for (let p = 0; p < np; p++) {
-      pos.push(cx + profile[p][0], profile[p][1], z);
+      pos.push(cx + profile[p][0] * s, profile[p][1], z);
       uv.push(p / (np - 1), z * vScale);
     }
     if (i > 0) {
@@ -900,14 +902,17 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25) {
   const platMat = new THREE.MeshStandardMaterial({ map: platformTex, roughness: 0.95, side: THREE.DoubleSide });
   const yellowMat = new THREE.MeshStandardMaterial({ color: 0xe8c63a, roughness: 0.9 });
   const roofColors = [0xbfe0d6, 0xe8e6df, 0x9fc8bd, 0xdfe3e4, 0x8fb8ac];
-  // arched roof profile: chord 4.6m, peak y=5.6
-  const R = 5, HALF = Math.asin(2.3 / R);
+  // fat 5.2m platforms that taper to slim points at both ends,
+  // like the lens-shaped roofs in the satellite photo
+  const taper = z => 1 - 0.66 * smooth(Math.min(1, Math.max(0, (Math.abs(z) - 66) / 40)));
+  // arched roof profile: chord 5.6m, peak y=5.6
+  const R = 6, HALF = Math.asin(2.8 / R);
   const archProfile = [];
   for (let i = 0; i <= 16; i++) {
     const a = -HALF + (2 * HALF) * (i / 16);
-    archProfile.push([R * Math.sin(a), 0.6 + R * Math.cos(a)]);
+    archProfile.push([R * Math.sin(a), -0.4 + R * Math.cos(a)]);
   }
-  const deckProfile = [[-1.7, 0], [-1.7, 1.1], [1.7, 1.1], [1.7, 0]];
+  const deckProfile = [[-2.6, 0], [-2.6, 1.1], [2.6, 1.1], [2.6, 0]];
   const pillarGeo = new THREE.CylinderGeometry(0.13, 0.13, 3.9, 8);
   const pillarMat = new THREE.MeshStandardMaterial({ color: 0x5e6a72, roughness: 0.6, metalness: 0.4 });
   const nPillars = Math.floor(PLATFORM_LEN / 14);
@@ -917,14 +922,14 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25) {
   const zP0 = -PLATFORM_LEN / 2, zP1 = PLATFORM_LEN / 2;
   PLATFORMS.forEach(({ x }, i) => {
     const cx = z => x + bendAt(z);    // platforms follow the curved alignment
-    sweepProfile(cx, zP0, zP1, deckProfile, platMat);
+    sweepProfile(cx, zP0, zP1, deckProfile, platMat, 0.25, taper);
     const archMat = new THREE.MeshStandardMaterial({
       color: roofColors[i % roofColors.length], roughness: 0.65, side: THREE.DoubleSide });
-    const roof = sweepProfile(cx, zP0 - 3, zP1 + 3, archProfile, archMat);
+    const roof = sweepProfile(cx, zP0 - 2, zP1 + 2, archProfile, archMat, 0.25, taper);
     registerFadeable(roof);
     sweepProfile(cx, zP0 + 4, zP1 - 4, [[-0.3, 4.9], [0.3, 4.9]], roofLightMat);
-    sweepProfile(cx, zP0, zP1, [[-1.6, 1.115], [-1.3, 1.115]], yellowMat);
-    sweepProfile(cx, zP0, zP1, [[1.3, 1.115], [1.6, 1.115]], yellowMat);
+    sweepProfile(cx, zP0, zP1, [[-2.45, 1.115], [-2.15, 1.115]], yellowMat, 0.25, taper);
+    sweepProfile(cx, zP0, zP1, [[2.15, 1.115], [2.45, 1.115]], yellowMat, 0.25, taper);
     for (let k = 0; k < nPillars; k++) {
       const z = zP0 + 7 + k * 14;
       m.makeTranslation(cx(z), 3.05, z);
@@ -943,15 +948,15 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25) {
   const lawnMat = new THREE.MeshStandardMaterial({ color: 0x6fae5a, roughness: 1 });
   const pathMat = new THREE.MeshStandardMaterial({ color: 0xc9c2b4, roughness: 1 });
   // central axis avenue (Gyoko-dori) leading to the station front
-  const avenue = new THREE.Mesh(new THREE.BoxGeometry(30, 0.06, 12), pathMat);
-  avenue.position.set(-69, 0.03, 0);
+  const avenue = new THREE.Mesh(new THREE.BoxGeometry(32, 0.06, 12), pathMat);
+  avenue.position.set(-75, 0.03, 0);
   avenue.receiveShadow = true;
   park.add(avenue);
   // lawn panels in a 2×3 grid split by walking paths
   for (const sz of [-1, 1]) {
     for (let r = 0; r < 3; r++) {
-      const lawn = new THREE.Mesh(new THREE.BoxGeometry(26, 0.05, 24), lawnMat);
-      lawn.position.set(-72 + r * 1.5, 0.025, sz * (10 + 14 + r * 26));
+      const lawn = new THREE.Mesh(new THREE.BoxGeometry(24, 0.05, 24), lawnMat);
+      lawn.position.set(-78 + r * 1.5, 0.025, sz * (10 + 14 + r * 26));
       lawn.scale.x = 1 - r * 0.08;
       lawn.receiveShadow = true;
       park.add(lawn);
@@ -962,7 +967,7 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25) {
   const spots = [];
   for (let i = 0; i < 54; i++) {
     const sz = i % 2 ? 1 : -1;
-    spots.push([-84 + rng() * 32, sz * (16 + rng() * 86)]);
+    spots.push([-89 + rng() * 27, sz * (16 + rng() * 86)]);
   }
   const trunkGeo = new THREE.CylinderGeometry(0.14, 0.2, 1.8, 6);
   const crownGeo = new THREE.SphereGeometry(1.5, 8, 6);
@@ -1114,7 +1119,7 @@ const station = new THREE.Group();
     }
   }
 }
-station.position.set(-43, 0, 0);
+station.position.set(-47, 0, 0);
 scene.add(station);
 registerFadeable(station);
 
@@ -1182,7 +1187,7 @@ const cityFar = new THREE.Group();
       const edges = corridorEdges(zC);
       let inner = side < 0 ? edges.left - 9 : edges.right + 9;
       // keep the Marunouchi park & plaza clear in front of the brick station
-      if (side < 0 && Math.abs(zC) < 130) inner = Math.min(inner, -92);
+      if (side < 0 && Math.abs(zC) < 130) inner = Math.min(inner, -98);
 
       const rows = Math.abs(zC) < 460 ? 2 : 1;
       let xEdge = inner;
@@ -1226,17 +1231,26 @@ const ROOF_R = 3.4, ROOF_HALF = 0.45;
 const roofCapGeo = new THREE.CylinderGeometry(
   ROOF_R, ROOF_R, CAR_LEN, 14, 1, true, Math.PI - ROOF_HALF, ROOF_HALF * 2);
 const ROOF_Y = 4.15 - ROOF_R * Math.cos(ROOF_HALF);   // arc peak ≈ 4.49
-// flat arc segment closing the curved roof at the cab ends
-const roofEndShape = new THREE.Shape();
-{
-  const n = 10;
-  for (let i = 0; i <= n; i++) {
-    const a = -ROOF_HALF + (2 * ROOF_HALF) * (i / n);
-    const px = ROOF_R * Math.sin(a), py = ROOF_R * Math.cos(a);
-    if (i === 0) roofEndShape.moveTo(px, py); else roofEndShape.lineTo(px, py);
+// cab-end face shaped to the body+roof-cap silhouette, so the front
+// texture hugs the car tube instead of floating as a bigger rectangle
+const cabFaceGeo = (() => {
+  const s = new THREE.Shape();
+  s.moveTo(-CAR_W / 2, 0.55);
+  s.lineTo(-CAR_W / 2, 4.15);
+  for (let i = 0; i <= 10; i++) {
+    const a = -ROOF_HALF + (2 * ROOF_HALF) * (i / 10);
+    s.lineTo(ROOF_R * Math.sin(a), 4.15 - ROOF_R * Math.cos(ROOF_HALF) + ROOF_R * Math.cos(a));
   }
-}
-const roofEndGeo = new THREE.ShapeGeometry(roofEndShape);
+  s.lineTo(CAR_W / 2, 4.15);
+  s.lineTo(CAR_W / 2, 0.55);
+  s.closePath();
+  const g = new THREE.ShapeGeometry(s, 4);
+  const peak = 4.15 - ROOF_R * Math.cos(ROOF_HALF) + ROOF_R;
+  const uvA = g.attributes.uv, pA = g.attributes.position;
+  for (let i = 0; i < uvA.count; i++)
+    uvA.setXY(i, (pA.getX(i) + CAR_W / 2) / CAR_W, (pA.getY(i) - 0.55) / (peak - 0.55));
+  return g;
+})();
 
 /* ---------- lofted duckbill nose (E5 / N700) ----------
    cross-sections morph from the car-body silhouette at the joint to a
@@ -1411,16 +1425,16 @@ function buildTrain(typeKey) {
       ac.position.set(0, 4.45, -3.4);
       markDetail(ac);
       car.add(ac);
-      if (i > 0) {       // inter-car gangway bellows
-        const gw = new THREE.Mesh(gangwayGeo, darkMat);
+      if (i < T.cars - 1) {  // gangway bellows — between cars only,
+        const gw = new THREE.Mesh(gangwayGeo, darkMat);  // never on the cab end
         gw.position.set(0, 2.5, -CAR_LEN / 2 - 0.05);
         markDetail(gw);
         car.add(gw);
       }
       if (i === 2 || i === 5) addPantograph(car, 3.2);
     } else {
-      // full-width diaphragm between Shinkansen cars
-      if (i > 0) {
+      // full-width diaphragm between Shinkansen cars (not on cab ends)
+      if (i < T.cars - 1) {
         const gw = new THREE.Mesh(gangwayGeo, endMat);
         gw.scale.set(1.6, 1.05, 1);
         gw.position.set(0, 2.45, -CAR_LEN / 2 - 0.05);
@@ -1466,19 +1480,10 @@ function buildTrain(typeKey) {
       car.add(skirtNose);
     } else {
       const tex = T.atlas ? (sign > 0 ? yamanoteMats.face : yamanoteMats.faceBack) : T.face;
-      const f = new THREE.Mesh(
-        new THREE.PlaneGeometry(CAR_W, 3.6),
-        new THREE.MeshBasicMaterial({ map: tex })
-      );
-      f.position.set(0, 2.35, sign * (CAR_LEN / 2 + 0.03));
+      const f = new THREE.Mesh(cabFaceGeo, new THREE.MeshBasicMaterial({ map: tex }));
+      f.position.set(0, 0, sign * (CAR_LEN / 2 + 0.03));
       if (sign < 0) f.rotation.y = Math.PI;
       car.add(f);
-      // close the curved roof above the cab
-      const capEnd = new THREE.Mesh(roofEndGeo, endMat);
-      capEnd.position.set(0, ROOF_Y, sign * (CAR_LEN / 2 + 0.02));
-      if (sign < 0) capEnd.rotation.y = Math.PI;
-      markDetail(capEnd);
-      car.add(capEnd);
       // front skirt + coupler
       const fs = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.6, 0.5), darkMat);
       fs.position.set(0, 0.75, sign * (CAR_LEN / 2 - 0.1));
@@ -1539,6 +1544,7 @@ function addTrain(typeKey, line, dir, phase, terminal = false) {
   t.timer = phase;
   t.speed = 0;
   t.sHead = 0;
+  t.joint = 0;
   t.group.visible = false;
   t.brakeDist = (t.type.maxSpeed ** 2) / 2.6;
   scene.add(t.group);
@@ -1657,6 +1663,14 @@ function updateTrain(t, dt) {
       else placeCars(t);
       break;
   }
+  // rail joints every 25m → 가땅고똥
+  if (t.group.visible && t.speed > 4) {
+    const j = Math.floor(t.sHead / 25);
+    if (j !== t.joint) {
+      t.joint = j;
+      sound.joint(t.speed, camera.position.distanceTo(t.cars[0].position), t.cars.length);
+    }
+  }
 }
 
 function updateSignals() {
@@ -1688,8 +1702,47 @@ const sound = (() => {
     o.connect(gn).connect(ctx.destination);
     o.start(t0); o.stop(t0 + dur + 0.05);
   }
+  // rail-joint clatter: one metallic noise burst = one axle hitting a joint
+  let noiseBuf = null;
+  function clack(delay, vol) {
+    ensure();
+    if (!noiseBuf) {
+      noiseBuf = ctx.createBuffer(1, (ctx.sampleRate * 0.07) | 0, ctx.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < d.length; i++)
+        d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (d.length * 0.28));
+    }
+    const t0 = ctx.currentTime + delay;
+    const s = ctx.createBufferSource();
+    s.buffer = noiseBuf;
+    s.playbackRate.value = 0.9 + Math.random() * 0.25;
+    const f = ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.frequency.value = 750 + Math.random() * 450;
+    f.Q.value = 1.1;
+    const g = ctx.createGain();
+    g.gain.value = vol;
+    s.connect(f).connect(g).connect(ctx.destination);
+    s.start(t0);
+  }
   return {
     toggle() { on = !on; if (on) ensure(); return on; },
+    // 가땅고똥: each car = two bogies × two axles; the rhythm stretches
+    // with speed and fades with camera distance
+    joint(speed, dist, cars) {
+      if (!on || speed < 3) return;
+      const vol = 0.2 / (1 + (dist / 48) ** 2);
+      if (vol < 0.012) return;
+      const axle = 2.1 / speed, bogie = 6.9 / speed, carT = 20 / speed;
+      const n = Math.min(cars, 6);
+      for (let i = 0; i < n; i++) {
+        const b = i * carT;
+        clack(b, vol);                          // 가
+        clack(b + axle, vol * 0.85);            // 땅
+        clack(b + bogie, vol * 0.9);            // 고
+        clack(b + bogie + axle, vol * 0.78);    // 똥
+      }
+    },
     jingle() { [659, 784, 880, 784, 988, 880].forEach((f, i) => tone(f, i * 0.16, 0.15)); },
     arrive() { tone(740, 0, 0.25); tone(587, 0.28, 0.35); },
     doors() { tone(830, 0, 0.1, 'square', 0.07); tone(830, 0.18, 0.1, 'square', 0.07); },
@@ -1782,40 +1835,57 @@ const ease = k => k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
 
 const views = {
   sat:  { pos: [6, 330, 40], target: [6, 0, 0], label: '위성 뷰 🛰️' },
-  plat: { pos: [-11.5, 3.2, 75], target: [-13.5, 2.6, -40], label: '승강장 뷰 🚉' },
+  plat: { pos: [-14, 3.2, 75], target: [-15.5, 2.6, -40], label: '승강장 뷰 🚉' },
   wide: { pos: [-105, 55, 165], target: [0, 6, -10], label: '전경 뷰 🏙️' },
 };
 
-let followIdx = 0;
+let followIdx = -1;
+const _fp = { x: 0, z: 0, yaw: 0 };
+const followAnchor = new THREE.Vector3();
+
+function snapToTrain(t) {
+  t.route.posAt(t.sHead - 4, _fp);
+  followAnchor.set(_fp.x, 2.5, _fp.z);
+  const rev = t.state === 'departRev' ? -1 : 1;
+  const fx = Math.sin(_fp.yaw) * rev, fz = Math.cos(_fp.yaw) * rev;
+  camera.position.set(_fp.x - fx * 18 + fz * 14, 7.5, _fp.z - fz * 18 - fx * 14);
+  controls.target.copy(followAnchor);
+}
+
 function followNext() {
   const candidates = trains.filter(t => t.group.visible);
   if (!candidates.length) { toast('지금은 들어오는 기차가 없어요. 잠시만요!'); return; }
-  followIdx = (followIdx + 1) % candidates.length;
+  followIdx++;
+  if (followIdx >= candidates.length) {      // cycled past the last train
+    followIdx = -1;
+    followTrain = null;
+    toast('따라가기 해제 🆓');
+    setActiveBtn();
+    return;
+  }
   followTrain = candidates[followIdx];
   camAnim = null;
-  controls.enabled = false;
-  toast(`${followTrain.type.name} 따라가는 중 🚆`);
+  snapToTrain(followTrain);
+  toast(`${followTrain.type.name} 따라가는 중 🚆 드래그·줌 자유!`);
   setActiveBtn();
 }
 
-const _fp = { x: 0, z: 0, yaw: 0 };
-function updateFollow(dt) {
+// the camera rides along with the train: each frame we translate the
+// camera and orbit target by the train's movement, so dragging/zooming
+// (and the view preset buttons) never break the follow
+function updateFollow() {
   if (!followTrain) return;
   if (!followTrain.group.visible) {
     const next = trains.find(t => t.group.visible);
-    if (next) { followTrain = next; toast(`${next.type.name} 따라가는 중 🚆`); }
-    else { followTrain = null; controls.enabled = true; setActiveBtn(); return; }
+    if (next) { followTrain = next; snapToTrain(next); toast(`${next.type.name} 따라가는 중 🚆`); }
+    else { followTrain = null; followIdx = -1; setActiveBtn(); return; }
   }
   const t = followTrain;
   t.route.posAt(t.sHead - 4, _fp);
-  const rev = t.state === 'departRev' ? -1 : 1;   // terminals back out
-  const fx = Math.sin(_fp.yaw) * rev, fz = Math.cos(_fp.yaw) * rev;
-  const desired = new THREE.Vector3(
-    _fp.x - fx * 16 + fz * 13, 6.5, _fp.z - fz * 16 - fx * 13);
-  const look = new THREE.Vector3(_fp.x + fx * 8, 3, _fp.z + fz * 8);
-  const a = 1 - Math.exp(-3.2 * dt);
-  camera.position.lerp(desired, a);
-  controls.target.lerp(look, a);
+  const dx = _fp.x - followAnchor.x, dz = _fp.z - followAnchor.z;
+  camera.position.x += dx; camera.position.z += dz;
+  controls.target.x += dx; controls.target.z += dz;
+  followAnchor.set(_fp.x, 2.5, _fp.z);
 }
 
 /* ================================================================
@@ -1842,9 +1912,24 @@ function setActiveBtn() {
   btns.follow.classList.toggle('active', !!followTrain);
 }
 btns.follow.addEventListener('click', followNext);
-btns.sat.addEventListener('click', () => { flyTo(views.sat.pos, views.sat.target); toast(views.sat.label); });
-btns.plat.addEventListener('click', () => { flyTo(views.plat.pos, views.plat.target); toast(views.plat.label); });
-btns.wide.addEventListener('click', () => { flyTo(views.wide.pos, views.wide.target); toast(views.wide.label); });
+// view presets keep following: while a train is followed they just
+// reposition the camera relative to it
+function viewBtn(view, followOff) {
+  return () => {
+    if (followTrain) {
+      camera.position.set(
+        followAnchor.x + followOff[0], followOff[1], followAnchor.z + followOff[2]);
+      controls.target.copy(followAnchor);
+      toast(view.label + ' — 따라가기 유지 중 🚆');
+    } else {
+      flyTo(view.pos, view.target);
+      toast(view.label);
+    }
+  };
+}
+btns.sat.addEventListener('click', viewBtn(views.sat, [0.1, 240, 0.1]));
+btns.plat.addEventListener('click', viewBtn(views.plat, [10, 4.5, 14]));
+btns.wide.addEventListener('click', viewBtn(views.wide, [60, 42, 75]));
 btns.night.addEventListener('click', () => {
   isNight = !isNight;
   btns.night.firstChild.textContent = isNight ? '☀️' : '🌙';
@@ -1877,10 +1962,8 @@ renderer.domElement.addEventListener('pointerdown', e => {
   dragged = false;
 });
 renderer.domElement.addEventListener('pointermove', e => {
-  if (downPos && Math.hypot(e.clientX - downPos[0], e.clientY - downPos[1]) > 8) {
-    dragged = true;
-    if (followTrain) { followTrain = null; controls.enabled = true; setActiveBtn(); }
-  }
+  if (downPos && Math.hypot(e.clientX - downPos[0], e.clientY - downPos[1]) > 8)
+    dragged = true;   // dragging orbits the camera but keeps the follow
 });
 renderer.domElement.addEventListener('pointerup', e => {
   if (!downPos || dragged) { downPos = null; return; }
