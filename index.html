@@ -196,28 +196,38 @@ const BUFFER_Z = 155;
 // island platforms like the satellite: different lengths, staggered
 // offsets (the roof ends fan diagonally), all curved with the bend
 const PLATFORMS = [
-  { x: -27.95, len: 230, off: -14 },   // Chuo
-  { x: -15.05, len: 264, off: 0 },     // Keihin/Yamanote
-  { x: -2.15,  len: 286, off: 6 },     // Yamanote/Keihin
-  { x: 10.75,  len: 286, off: 12 },    // Ueno-Tokyo
-  { x: 24.05,  len: 292, off: 4 },     // Tokaido Shinkansen
-  { x: 32.75,  len: 292, off: -6 },    // Tokaido Shinkansen
-  { x: 45.85,  len: 262, off: -18 },   // Tohoku Shinkansen
+  { x: -27.95, len: 230, off: -14, bw: 1 },     // Chuo
+  { x: -15.05, len: 264, off: 0,   bw: 0.8 },   // Keihin/Yamanote
+  { x: -2.15,  len: 286, off: 6,   bw: 0.55 },  // Yamanote/Keihin
+  { x: 10.75,  len: 286, off: 12,  bw: 0.3 },   // Ueno-Tokyo
+  { x: 24.05,  len: 292, off: 4,   bw: 0.05 },  // Tokaido Shinkansen
+  { x: 32.75,  len: 292, off: -6,  bw: 0.05 },  // Tokaido Shinkansen
+  { x: 45.85,  len: 262, off: -18, bw: 0 },     // Tohoku Shinkansen
 ];
 
 const smooth = k => k * k * (3 - 2 * k);
 const lerp = (a, b, k) => a + (b - a) * k;
 
-// global alignment: a diagonal lean (S) PLUS a real bow through the
-// station so the platforms visibly CURVE (not just tilt) like the photo
+/* global alignment — like the photo, the curvature is NOT uniform:
+   the Shinkansen side (east) runs straight, while the conventional
+   lines curve more and more strongly toward the Marunouchi (west)
+   side. Every line gets a per-group bow weight; tracks and platform
+   in one group share a weight so clearances are exact, and between
+   groups the gaps only widen mid-station (the yard splays). */
 const BEND_AMP = 22;
-const bendAt = z => {
-  const lean = BEND_AMP * (smooth((z + Z_END) / (2 * Z_END)) * 2 - 1);
-  const bow = Math.abs(z) <= 230 ? 8 * (1 + Math.cos(Math.PI * z / 230)) : 0;
-  return lean + bow;
+const lean = z => BEND_AMP * (smooth((z + Z_END) / (2 * Z_END)) * 2 - 1);
+const bowRaw = z => Math.abs(z) <= 230 ? -(1 + Math.cos(Math.PI * z / 230)) * 5.5 : 0;
+const BOW_W = {
+  CH1: 1, CH2: 1,           // Chuo: hugs the curve, strongest bow
+  KA: 0.8, YA: 0.8,         // Keihin/Yamanote west pair
+  YB: 0.55, KB: 0.55,       // Yamanote/Keihin east pair
+  UTN: 0.3, UTS: 0.3,       // Ueno-Tokyo Line
+  TKS1: 0.05, TKS2: 0.05, TKP: 0.05,   // Tokaido Shinkansen: almost straight
+  THS1: 0, THS2: 0,         // Tohoku Shinkansen: dead straight
 };
+const bendFor = (w, z) => lean(z) + w * bowRaw(z);
 
-// x of a line at signed z (squeeze + global bend)
+// x of a line at signed z (squeeze + weighted bend)
 function lineXAt(line, z) {
   let x = LINES_X[line];
   const sq = SQUEEZE[line];
@@ -229,7 +239,7 @@ function lineXAt(line, z) {
       else if (az > SQ_Z0) x = lerp(x, to, smooth((az - SQ_Z0) / (SQ_Z1 - SQ_Z0)));
     }
   }
-  return x + bendAt(z);
+  return x + bendFor(BOW_W[line], z);
 }
 
 // outer edges of the rail corridor (drives ballast, gantries, city)
@@ -873,7 +883,7 @@ for (const [l, type] of Object.entries(LINE_DEFS)) {
 }
 // Shinkansen storage track (stub siding with buffers at both ends)
 {
-  const xFn = z => LINES_X.TKP + bendAt(z);
+  const xFn = z => LINES_X.TKP + bendFor(BOW_W.TKP, z);
   railPath(xFn, -BUFFER_Z, 115);
   addBuffer(xFn(-BUFFER_Z - 0.5), -BUFFER_Z - 0.5);
   addBuffer(xFn(115.5), 115.5);
@@ -949,11 +959,11 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null)
   const pillars = new THREE.InstancedMesh(pillarGeo, pillarMat, totalPillars);
   const m = new THREE.Matrix4();
   let pi = 0;
-  PLATFORMS.forEach(({ x, len, off }, i) => {
+  PLATFORMS.forEach(({ x, len, off, bw }, i) => {
     const zP0 = off - len / 2, zP1 = off + len / 2;
     // taper to a slim point over each platform's last 45m
     const taper = z => 1 - 0.7 * smooth(Math.min(1, Math.max(0, (Math.abs(z - off) - (len / 2 - 45)) / 45)));
-    const cx = z => x + bendAt(z);    // platforms follow the curved alignment
+    const cx = z => x + bendFor(bw, z);  // platforms follow their group's curve
     sweepProfile(cx, zP0, zP1, deckProfile, platMat, 0.25, taper);
     const archMat = new THREE.MeshStandardMaterial({
       color: roofColors[i % roofColors.length], roughness: 0.65, side: THREE.DoubleSide });
@@ -1065,7 +1075,7 @@ const detailGroup = new THREE.Group();
   {
     const pts = [];
     for (let z = -BUFFER_Z; z <= 115; z += 12)
-      pts.push(new THREE.Vector3(LINES_X.TKP + bendAt(z), 6.3, z));
+      pts.push(new THREE.Vector3(LINES_X.TKP + bendFor(BOW_W.TKP, z), 6.3, z));
     const tube = new THREE.Mesh(
       new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), pts.length * 2, 0.03, 4, false),
       wireMat
@@ -2082,8 +2092,8 @@ function startTrains() {
   parkedTrain = buildTrain('tokaido');
   for (let i = 0; i < parkedTrain.cars.length; i++) {
     const z = -82 + i * (CAR_LEN + CAR_GAP);
-    parkedTrain.cars[i].position.set(LINES_X.TKP + bendAt(z), 0, z);
-    parkedTrain.cars[i].rotation.y = Math.atan2(bendAt(z + 1) - bendAt(z), 1);
+    parkedTrain.cars[i].position.set(LINES_X.TKP + bendFor(BOW_W.TKP, z), 0, z);
+    parkedTrain.cars[i].rotation.y = Math.atan2(bendFor(BOW_W.TKP, z + 1) - bendFor(BOW_W.TKP, z), 1);
   }
   scene.add(parkedTrain.group);
 }
