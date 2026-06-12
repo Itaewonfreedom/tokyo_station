@@ -175,8 +175,8 @@ const LINES_X = {
   THS1: 41.5, THS2: 50.2,                  // 東北新幹線 (terminal, enters from N)
 };
 
-// throat squeeze: beyond |z|=135 the lines sweep into slim corridors
-const SQ_Z0 = 135, SQ_Z1 = 335;
+// throat squeeze: beyond |z|=160 the lines sweep into slim corridors
+const SQ_Z0 = 160, SQ_Z1 = 380;
 const SQUEEZE = {
   CH1: { N: -15.8, S: null }, CH2: { N: -11.4, S: null },
   KA:  { N: -7.0,  S: -11.4 }, YA: { N: -2.6, S: -7.0 },
@@ -190,18 +190,25 @@ const LINE_DEFS = {
   KA: 'T', YA: 'T', YB: 'T', KB: 'T', UTN: 'T', UTS: 'T',
   TKS1: 'S', TKS2: 'S', THS1: 'N', THS2: 'N',
 };
-const BUFFER_Z = 118;
+const BUFFER_Z = 155;
 
+// island platforms like the satellite: different lengths, staggered
+// offsets (the roof ends fan diagonally), all curved with the bend
 const PLATFORMS = [
-  { x: -27.95 }, { x: -15.05 }, { x: -2.15 }, { x: 10.75 },
-  { x: 24.05 }, { x: 32.75 }, { x: 45.85 },
+  { x: -27.95, len: 230, off: -14 },   // Chuo
+  { x: -15.05, len: 264, off: 0 },     // Keihin/Yamanote
+  { x: -2.15,  len: 286, off: 6 },     // Yamanote/Keihin
+  { x: 10.75,  len: 286, off: 12 },    // Ueno-Tokyo
+  { x: 24.05,  len: 292, off: 4 },     // Tokaido Shinkansen
+  { x: 32.75,  len: 292, off: -6 },    // Tokaido Shinkansen
+  { x: 45.85,  len: 262, off: -18 },   // Tohoku Shinkansen
 ];
 
 const smooth = k => k * k * (3 - 2 * k);
 const lerp = (a, b, k) => a + (b - a) * k;
 
 // global S-bend across the whole site (like the satellite alignment)
-const BEND_AMP = 18;
+const BEND_AMP = 26;
 const bendAt = z => BEND_AMP * (smooth((z + Z_END) / (2 * Z_END)) * 2 - 1);
 
 // x of a line at signed z (squeeze + global bend)
@@ -224,7 +231,7 @@ function corridorEdges(z) {
   if (z < 0)
     return { left: lineXAt('CH1', z) - 3.2, right: lineXAt('THS2', z) + 3.2 };
   // south of the station the Chuo & Tohoku-Shinkansen tracks are gone
-  const k = smooth(Math.min(1, Math.max(0, (z - 120) / 70)));
+  const k = smooth(Math.min(1, Math.max(0, (z - 150) / 60)));
   return {
     left: lerp(lineXAt('CH1', z) - 3.2, lineXAt('KA', z) - 3.2, k),
     right: lerp(lineXAt('THS2', z) + 3.2, lineXAt('TKS2', z) + 3.2, k),
@@ -283,14 +290,18 @@ function canvasTex(w, h, draw, rx = 1, ry = 1) {
 }
 
 const ballastTex = canvasTex(256, 256, (g, w, h) => {
-  g.fillStyle = '#4e4a45'; g.fillRect(0, 0, w, h);
+  // brownish track bed like the aerial photo
+  g.fillStyle = '#5b5147'; g.fillRect(0, 0, w, h);
   for (let i = 0; i < 2600; i++) {
-    const v = 50 + Math.random() * 70;
-    g.fillStyle = `rgb(${v|0},${v*0.95|0},${v*0.88|0})`;
+    const v = 60 + Math.random() * 75;
+    g.fillStyle = `rgb(${v|0},${v*0.9|0},${v*0.78|0})`;
     g.beginPath();
     g.arc(Math.random() * w, Math.random() * h, 1 + Math.random() * 2.4, 0, 7);
     g.fill();
   }
+  g.fillStyle = 'rgba(30,26,22,.35)';
+  for (let i = 0; i < 12; i++)
+    g.fillRect(Math.random() * w, 0, 2 + Math.random() * 4, h);
 });
 
 const asphaltTex = canvasTex(256, 256, (g, w, h) => {
@@ -848,13 +859,13 @@ for (const [l, type] of Object.entries(LINE_DEFS)) {
   addBuffer(xFn(-BUFFER_Z - 0.5), -BUFFER_Z - 0.5);
   addBuffer(xFn(115.5), 115.5);
 }
-// decorative scissors crossovers just beyond the platform ends
-crossRails('KA', 'YA', 107, 131, -1);
-crossRails('YB', 'KB', 107, 131, 1);
-crossRails('UTN', 'UTS', 107, 131, -1);
-crossRails('TKS1', 'TKS2', 107, 131, 1);
-crossRails('THS1', 'THS2', 107, 131, -1);
-crossRails('CH1', 'CH2', 60, 95, -1);
+// decorative scissors crossovers just beyond each platform's ends
+crossRails('KA', 'YA', 136, 156, -1);
+crossRails('YB', 'KB', 140, 158, -1);
+crossRails('UTN', 'UTS', 134, 156, -1);
+crossRails('TKS1', 'TKS2', 144, 154, -1);
+crossRails('THS1', 'THS2', 117, 137, 1);
+crossRails('CH1', 'CH2', 104, 124, 1);
 
 {
   const ties = new THREE.InstancedMesh(tieGeo, tieMat, tieMatrices.length);
@@ -902,35 +913,36 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null)
   const platMat = new THREE.MeshStandardMaterial({ map: platformTex, roughness: 0.95, side: THREE.DoubleSide });
   const yellowMat = new THREE.MeshStandardMaterial({ color: 0xe8c63a, roughness: 0.9 });
   const roofColors = [0xbfe0d6, 0xe8e6df, 0x9fc8bd, 0xdfe3e4, 0x8fb8ac];
-  // fat 5.2m platforms that taper to slim points at both ends,
-  // like the lens-shaped roofs in the satellite photo
-  const taper = z => 1 - 0.66 * smooth(Math.min(1, Math.max(0, (Math.abs(z) - 66) / 40)));
-  // arched roof profile: chord 5.6m, peak y=5.6
-  const R = 6, HALF = Math.asin(2.8 / R);
+  // wide, almost-flat roofs (chord 8.4m) so the yard reads as a solid
+  // deck of roof bands from above, with only slim track slits between
+  const R = 12, HALF = Math.asin(4.2 / R);
   const archProfile = [];
   for (let i = 0; i <= 16; i++) {
     const a = -HALF + (2 * HALF) * (i / 16);
-    archProfile.push([R * Math.sin(a), -0.4 + R * Math.cos(a)]);
+    archProfile.push([R * Math.sin(a), 5.6 - R + R * Math.cos(a)]);
   }
   const deckProfile = [[-2.6, 0], [-2.6, 1.1], [2.6, 1.1], [2.6, 0]];
   const pillarGeo = new THREE.CylinderGeometry(0.13, 0.13, 3.9, 8);
   const pillarMat = new THREE.MeshStandardMaterial({ color: 0x5e6a72, roughness: 0.6, metalness: 0.4 });
-  const nPillars = Math.floor(PLATFORM_LEN / 14);
-  const pillars = new THREE.InstancedMesh(pillarGeo, pillarMat, nPillars * PLATFORMS.length);
+  const totalPillars = PLATFORMS.reduce((s, p) => s + Math.floor(p.len / 14), 0);
+  const pillars = new THREE.InstancedMesh(pillarGeo, pillarMat, totalPillars);
   const m = new THREE.Matrix4();
   let pi = 0;
-  const zP0 = -PLATFORM_LEN / 2, zP1 = PLATFORM_LEN / 2;
-  PLATFORMS.forEach(({ x }, i) => {
+  PLATFORMS.forEach(({ x, len, off }, i) => {
+    const zP0 = off - len / 2, zP1 = off + len / 2;
+    // taper to a slim point over each platform's last 45m
+    const taper = z => 1 - 0.7 * smooth(Math.min(1, Math.max(0, (Math.abs(z - off) - (len / 2 - 45)) / 45)));
     const cx = z => x + bendAt(z);    // platforms follow the curved alignment
     sweepProfile(cx, zP0, zP1, deckProfile, platMat, 0.25, taper);
     const archMat = new THREE.MeshStandardMaterial({
       color: roofColors[i % roofColors.length], roughness: 0.65, side: THREE.DoubleSide });
     const roof = sweepProfile(cx, zP0 - 2, zP1 + 2, archProfile, archMat, 0.25, taper);
     registerFadeable(roof);
-    sweepProfile(cx, zP0 + 4, zP1 - 4, [[-0.3, 4.9], [0.3, 4.9]], roofLightMat);
+    sweepProfile(cx, zP0 + 6, zP1 - 6, [[-0.3, 4.78], [0.3, 4.78]], roofLightMat);
     sweepProfile(cx, zP0, zP1, [[-2.45, 1.115], [-2.15, 1.115]], yellowMat, 0.25, taper);
     sweepProfile(cx, zP0, zP1, [[2.15, 1.115], [2.45, 1.115]], yellowMat, 0.25, taper);
-    for (let k = 0; k < nPillars; k++) {
+    const nP = Math.floor(len / 14);
+    for (let k = 0; k < nP; k++) {
       const z = zP0 + 7 + k * 14;
       m.makeTranslation(cx(z), 3.05, z);
       pillars.setMatrixAt(pi++, m);
@@ -1188,6 +1200,8 @@ const cityFar = new THREE.Group();
       let inner = side < 0 ? edges.left - 9 : edges.right + 9;
       // keep the Marunouchi park & plaza clear in front of the brick station
       if (side < 0 && Math.abs(zC) < 130) inner = Math.min(inner, -98);
+      // reserve the Yaesu front for the GranTokyo complex
+      if (side > 0 && Math.abs(zC) < 210) inner = Math.max(inner, 92);
 
       const rows = Math.abs(zC) < 460 ? 2 : 1;
       let xEdge = inner;
@@ -1205,6 +1219,30 @@ const cityFar = new THREE.Group();
       }
       z += d + gap;
     }
+  }
+}
+// GranTokyo: the long white complex + twin towers hugging the Yaesu
+// (east) side of the yard, as in the satellite photo
+{
+  const whiteMat = () => {
+    const mat = new THREE.MeshStandardMaterial({
+      map: facadeDay[2].clone(), emissiveMap: facadeNight[2],
+      emissive: 0xffffff, emissiveIntensity: 0, roughness: 0.5, metalness: 0.15,
+    });
+    cityMats.push(mat);
+    return mat;
+  };
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(16, 38, 250), whiteMat());
+  slab.material.map.repeat.set(6, 2);
+  slab.position.set(68, 19, -6);
+  slab.castShadow = slab.receiveShadow = true;
+  cityNear.add(slab);
+  for (const tz of [-152, 142]) {
+    const tower = new THREE.Mesh(new THREE.BoxGeometry(28, 150, 34), whiteMat());
+    tower.material.map.repeat.set(2, 9);
+    tower.position.set(78, 75, tz);
+    tower.castShadow = tower.receiveShadow = true;
+    cityNear.add(tower);
   }
 }
 scene.add(cityNear);
