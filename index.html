@@ -799,13 +799,13 @@ ground.position.y = -0.05;
 ground.receiveShadow = true;
 scene.add(ground);
 
-// ballast bed shaped like the funnel: wide at the station, slim far out
-{
+// funnel-shaped strips at a given height (ballast top + viaduct soffit)
+function funnelStrip(y, mat) {
   const pos = [], uv = [], idx = [];
   let i = 0;
   for (let z = -Z_END; z <= Z_END; z += 8, i++) {
     const { left, right } = corridorEdges(z);
-    pos.push(left, DECK + 0.28, z, right, DECK + 0.28, z);
+    pos.push(left, y, z, right, y, z);
     uv.push(0, z / 6, (right - left) / 6, z / 6);
     if (i > 0) {
       const a = (i - 1) * 2;
@@ -817,10 +817,17 @@ scene.add(ground);
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   geo.setIndex(idx);
   geo.computeVertexNormals();
-  const bed = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: ballastTex, roughness: 1 }));
-  bed.receiveShadow = true;
-  scene.add(bed);
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.receiveShadow = true;
+  scene.add(mesh);
+  return mesh;
 }
+// ballast bed on the deck (double-sided so the viaduct never looks hollow)
+funnelStrip(DECK + 0.28, new THREE.MeshStandardMaterial({
+  map: ballastTex, roughness: 1, side: THREE.DoubleSide }));
+// concrete soffit closing the underside of the viaduct
+funnelStrip(DECK - 0.55, new THREE.MeshStandardMaterial({
+  color: 0x6e6a64, roughness: 1, side: THREE.DoubleSide }));
 
 /* ---------- viaduct: the yard rides a ~3-storey brick arch structure
    (like the real red-brick viaduct under Tokyo Station's tracks) ---------- */
