@@ -2245,14 +2245,14 @@ function updateDayNight(dt) {
    Quality presets
 ================================================================ */
 const isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
-// fps caps + pixel-ratio caps keep phones cool: rendering at the display's
-// native 120 Hz and 3× DPR is what cooks the battery, so we throttle both
 const qualities = {
-  low:  { px: Math.min(devicePixelRatio, 1),   shadows: false, shadowSize: 512,  fogFar: 450, detail: false, fps: 30 },
-  med:  { px: Math.min(devicePixelRatio, 1.4), shadows: !isMobile, shadowSize: 1024, fogFar: 650, detail: true, fps: isMobile ? 30 : 60 },
-  high: { px: Math.min(devicePixelRatio, 2),   shadows: true,  shadowSize: 2048, fogFar: 800, detail: true, fps: 60 },
+  low:  { px: 0.7, shadows: false, shadowSize: 512,  fogFar: 450, detail: false },
+  med:  { px: 1.0, shadows: true,  shadowSize: 1024, fogFar: 650, detail: true },
+  high: { px: Math.min(devicePixelRatio, 2), shadows: true, shadowSize: 2048, fogFar: 800, detail: true },
 };
-let minFrame = 1 / 60;   // seconds between rendered frames (set by applyQuality)
+// cap the render rate at 60 fps — the loop was rendering at the display's
+// native refresh (up to 120 Hz on ProMotion iPhones), which cooked the phone
+const minFrame = 1 / 60;
 function setTrainDetail(visible) {
   trainDetailVisible = visible;
   const all = parkedTrain ? [...trains, parkedTrain] : trains;
@@ -2274,7 +2274,6 @@ function applyQuality(q) {
     }
   });
   scene.fog.far = Q.fogFar;
-  minFrame = 1 / Q.fps;
   detailGroup.visible = Q.detail;
   cityFar.visible = Q.detail;
   setTrainDetail(Q.detail);
@@ -2588,7 +2587,7 @@ overlay.addEventListener('click', () => {
 // as a stuck/bugged train. The Tokaido N700 still arrives & departs
 // normally on its terminal tracks.)
 
-let currentQuality = isMobile ? 'low' : (likelyLowEnd ? 'med' : 'high');
+let currentQuality = likelyLowEnd ? 'med' : 'high';
 
 new THREE.TextureLoader().load(atlasData, (atlas) => {
   atlas.colorSpace = THREE.SRGBColorSpace;
