@@ -2244,11 +2244,15 @@ function updateDayNight(dt) {
 /* ================================================================
    Quality presets
 ================================================================ */
+const isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+// fps caps + pixel-ratio caps keep phones cool: rendering at the display's
+// native 120 Hz and 3× DPR is what cooks the battery, so we throttle both
 const qualities = {
-  low:  { px: 0.7, shadows: false, shadowSize: 512,  fogFar: 450, detail: false },
-  med:  { px: 1.0, shadows: true,  shadowSize: 1024, fogFar: 650, detail: true },
-  high: { px: Math.min(devicePixelRatio, 2), shadows: true, shadowSize: 2048, fogFar: 800, detail: true },
+  low:  { px: Math.min(devicePixelRatio, 1),   shadows: false, shadowSize: 512,  fogFar: 450, detail: false, fps: 30 },
+  med:  { px: Math.min(devicePixelRatio, 1.4), shadows: !isMobile, shadowSize: 1024, fogFar: 650, detail: true, fps: isMobile ? 30 : 60 },
+  high: { px: Math.min(devicePixelRatio, 2),   shadows: true,  shadowSize: 2048, fogFar: 800, detail: true, fps: 60 },
 };
+let minFrame = 1 / 60;   // seconds between rendered frames (set by applyQuality)
 function setTrainDetail(visible) {
   trainDetailVisible = visible;
   const all = parkedTrain ? [...trains, parkedTrain] : trains;
@@ -2270,13 +2274,14 @@ function applyQuality(q) {
     }
   });
   scene.fog.far = Q.fogFar;
+  minFrame = 1 / Q.fps;
   detailGroup.visible = Q.detail;
   cityFar.visible = Q.detail;
   setTrainDetail(Q.detail);
   document.querySelectorAll('#quality button').forEach(b => b.classList.toggle('active', b.dataset.q === q));
   toast({ low: L.qLowMsg, med: L.qMedMsg, high: L.qHighMsg }[q]);
 }
-const likelyLowEnd = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent) || navigator.hardwareConcurrency <= 4;
+const likelyLowEnd = isMobile || navigator.hardwareConcurrency <= 4;
 
 /* ================================================================
    Camera views & train following
@@ -2583,7 +2588,7 @@ overlay.addEventListener('click', () => {
 // as a stuck/bugged train. The Tokaido N700 still arrives & departs
 // normally on its terminal tracks.)
 
-let currentQuality = likelyLowEnd ? 'med' : 'high';
+let currentQuality = isMobile ? 'low' : (likelyLowEnd ? 'med' : 'high');
 
 new THREE.TextureLoader().load(atlasData, (atlas) => {
   atlas.colorSpace = THREE.SRGBColorSpace;
@@ -2707,13 +2712,20 @@ let slowAcc = 0;
 let paused = false;
 document.addEventListener('visibilitychange', () => {
   paused = document.hidden;
-  if (!paused) { clock.getDelta(); requestAnimationFrame(animate); }
+  if (!paused) { clock.getDelta(); frameAcc = 0; requestAnimationFrame(animate); }
 });
 
 const clock = new THREE.Clock();
+let frameAcc = 0;
 function animate() {
   if (paused) return;
-  const dt = Math.min(clock.getDelta(), 0.05);
+  requestAnimationFrame(animate);
+  // frame-rate cap: keep waking cheaply but only render every minFrame
+  // seconds, so a 120 Hz phone doesn't render 120 fps and cook itself
+  frameAcc += clock.getDelta();
+  if (frameAcc < minFrame) return;
+  const dt = Math.min(frameAcc, 0.05);
+  frameAcc = 0;
   for (const t of trains) updateTrain(t, dt);
   updateDayNight(dt);
   updateClock();
@@ -2732,7 +2744,6 @@ function animate() {
   updateFollow(dt);
   controls.update();
   renderer.render(scene, camera);
-  requestAnimationFrame(animate);
 }
 animate();
 
