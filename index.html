@@ -85,6 +85,8 @@
 
 <div class="btn-col">
   <button class="ui-btn" id="btn-follow" title="기차 따라가기">🚆<small id="lbl-follow">따라가기</small></button>
+  <button class="ui-btn" id="btn-tour"   title="시네마틱 투어">🎬<small id="lbl-tour">투어</small></button>
+  <button class="ui-btn" id="btn-game"   title="기차 찾기 게임">🎮<small id="lbl-game">게임</small></button>
   <button class="ui-btn" id="btn-sat"    title="위성 뷰">🛰️<small id="lbl-sat">위성</small></button>
   <button class="ui-btn" id="btn-plat"   title="승강장 뷰">🚉<small id="lbl-plat">승강장</small></button>
   <button class="ui-btn" id="btn-wide"   title="전경 뷰">🏙️<small id="lbl-wide">전경</small></button>
@@ -1052,6 +1054,47 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null)
   scene.add(pillars);
 }
 
+/* ---------- hanging destination boards over each platform ---------- */
+const PLAT_INFO = [
+  { name: '中央線',          no: '1・2',   color: '#f15a22' },
+  { name: '京浜東北・山手線', no: '3・4',   color: '#9bc31c' },
+  { name: '山手・京浜東北線', no: '5・6',   color: '#56b4e0' },
+  { name: '上野東京ライン',   no: '7・8',   color: '#f0a050' },
+  { name: '東海道新幹線',     no: '14・15', color: '#1565c0' },
+  { name: '東海道新幹線',     no: '16・17', color: '#1565c0' },
+  { name: '東北新幹線',       no: '20・21', color: '#2e8b2e' },
+];
+{
+  const signTex = (info) => {
+    const c = document.createElement('canvas'); c.width = 512; c.height = 136;
+    const g = c.getContext('2d');
+    g.fillStyle = '#0d1b3e'; g.fillRect(0, 0, 512, 136);
+    g.fillStyle = info.color; g.fillRect(0, 0, 512, 22);
+    g.fillStyle = '#fff'; g.textBaseline = 'middle';
+    g.font = 'bold 52px "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif';
+    g.textAlign = 'left'; g.fillText(info.name, 18, 76);
+    g.fillStyle = info.color;
+    g.font = 'bold 30px sans-serif'; g.textAlign = 'right';
+    g.fillText('のりば ' + info.no, 496, 110);
+    g.strokeStyle = 'rgba(255,255,255,.3)'; g.lineWidth = 3; g.strokeRect(2, 2, 508, 132);
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+    return t;
+  };
+  const postMat = new THREE.MeshStandardMaterial({ color: 0x3a3f45, roughness: 0.6, metalness: 0.4 });
+  PLATFORMS.forEach((p, i) => {
+    const info = PLAT_INFO[i];
+    const mat = new THREE.MeshBasicMaterial({ map: signTex(info), side: THREE.DoubleSide });
+    for (const dz of [-55, 55]) {
+      const z = p.off + dz, x = p.x + bendFor(p.bw, z);
+      const board = new THREE.Mesh(new THREE.PlaneGeometry(3.0, 0.8), mat);
+      board.position.set(x, DECK + 3.7, z);           // face down the platform
+      scene.add(board);
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.9, 0.1), postMat);
+      post.position.set(x, DECK + 4.55, z); scene.add(post);
+    }
+  });
+}
+
 /* ---------- Marunouchi park: lawns, paths and trees in front of the
    old brick station, like the satellite photo ---------- */
 {
@@ -1397,6 +1440,24 @@ const station = new THREE.Group();
     new THREE.MeshStandardMaterial({ color: 0xf3eee2, roughness: 0.8 }));
   clockFace.rotation.y = -Math.PI / 2; clockFace.position.set(-11.2, 19.8, 0);
   station.add(clockFace);
+  // 12 hour ticks + live hands (driven from the real clock in animate)
+  const tickMat = new THREE.MeshBasicMaterial({ color: 0x33312c });
+  for (let i = 0; i < 12; i++) {
+    const t = new THREE.Mesh(new THREE.BoxGeometry(i % 3 ? 0.05 : 0.09, 0.22, 0.04), tickMat);
+    const a = i / 12 * Math.PI * 2;
+    t.position.set(-11.24, 19.8 + Math.cos(a) * 1.15, Math.sin(a) * 1.15);
+    t.rotation.x = -a; station.add(t);
+  }
+  const clockHands = new THREE.Group();
+  clockHands.position.set(-11.27, 19.8, 0);
+  clockHands.rotation.y = -Math.PI / 2;        // lie in the clock-face plane
+  const handMat = new THREE.MeshBasicMaterial({ color: 0x2a2a2a });
+  function hand(len, w) {
+    const g = new THREE.BoxGeometry(w, len, 0.05); g.translate(0, len / 2, 0);
+    const m = new THREE.Mesh(g, handMat); clockHands.add(m); return m;
+  }
+  station.add(clockHands);
+  station.userData.clock = { hour: hand(0.78, 0.11), minute: hand(1.12, 0.07) };
 
   // ---- octagonal slate domes at both ends ----
   function dome(z) {
@@ -1981,6 +2042,7 @@ function updateTrain(t, dt) {
         t.state = 'enter';
         t.sHead = t.len + 2;
         t.speed = t.type.maxSpeed;
+        t.braked = false;
         t.group.visible = true;
         setTravel(t, true);
         placeCars(t);
@@ -1994,8 +2056,10 @@ function updateTrain(t, dt) {
         setDoors(t, true);
         sound.arrive();
       } else {
-        if (dist < t.brakeDist)
+        if (dist < t.brakeDist) {
+          if (!t.braked) { t.braked = true; sound.vvvf(false, camera.position.distanceTo(t.cars[0].position)); }
           t.speed = Math.max(1.2, t.type.maxSpeed * Math.sqrt(dist / t.brakeDist));
+        }
         t.sHead += t.speed * dt;
       }
       if (blocks[t.entryBlock] === t && t.sHead - t.len > t.route.sEnterClear)
@@ -2021,7 +2085,9 @@ function updateTrain(t, dt) {
         } else {
           t.state = 'depart';
         }
+        t.braked = false;
         sound.jingle();
+        sound.vvvf(true, camera.position.distanceTo(t.cars[0].position));
       }
       break;
     case 'depart':
@@ -2122,6 +2188,28 @@ const sound = (() => {
     jingle() { [659, 784, 880, 784, 988, 880].forEach((f, i) => tone(f, i * 0.16, 0.15)); },
     arrive() { tone(740, 0, 0.25); tone(587, 0.28, 0.35); },
     doors() { tone(830, 0, 0.1, 'square', 0.07); tone(830, 0.18, 0.1, 'square', 0.07); },
+    // VVVF inverter whine: a filtered sawtooth that sweeps with the motor
+    // — rising on departure, falling on braking (the "우우웅↗" / "↘우웅")
+    vvvf(rising, dist = 0) {
+      if (!on) return; ensure();
+      const vol = 0.07 / (1 + (dist / 70) ** 2);
+      if (vol < 0.006) return;
+      const t0 = ctx.currentTime, dur = 3.4;
+      const o = ctx.createOscillator(), g = ctx.createGain(), lp = ctx.createBiquadFilter();
+      o.type = 'sawtooth';
+      lp.type = 'lowpass'; lp.Q.value = 7;
+      const f0 = rising ? 110 : 560, f1 = rising ? 560 : 110;
+      o.frequency.setValueAtTime(f0, t0);
+      o.frequency.exponentialRampToValueAtTime(f1, t0 + dur);
+      lp.frequency.setValueAtTime(rising ? 380 : 1500, t0);
+      lp.frequency.exponentialRampToValueAtTime(rising ? 1500 : 380, t0 + dur);
+      g.gain.setValueAtTime(0, t0);
+      g.gain.linearRampToValueAtTime(vol, t0 + 0.35);
+      g.gain.setValueAtTime(vol, t0 + dur - 0.7);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+      o.connect(lp).connect(g).connect(ctx.destination);
+      o.start(t0); o.stop(t0 + dur + 0.05);
+    },
     horn(high) {
       tone(high ? 520 : 310, 0, 0.55, 'sawtooth', 0.09);
       tone(high ? 620 : 370, 0, 0.55, 'sawtooth', 0.09);
@@ -2216,7 +2304,7 @@ const STR = {
   ko: {
     title: '🚉 도쿄역 철도 시뮬레이터',
     sub: '화면을 드래그해서 둘러보세요 · 기차를 터치하면 빵!',
-    follow: '따라가기', sat: '위성', plat: '승강장', wide: '전경',
+    follow: '따라가기', tour: '투어', game: '게임', sat: '위성', plat: '승강장', wide: '전경',
     night: '낮/밤', sound: '소리', lang: '한국어',
     qlow: '저사양', qmed: '보통', qhigh: '고화질',
     ovTitle: '도쿄역 기차 구경',
@@ -2234,11 +2322,15 @@ const STR = {
     qLowMsg: '저사양 모드 (그림자·디테일 끔)', qMedMsg: '보통 화질', qHighMsg: '고화질 모드',
     langMsg: '한국어',
     cameo: n => `${n}번 승강장 어딘가에 가족과 고양이가 있어요! 🐱🚼`,
+    tourOn: '시네마틱 투어 시작 🎬 (화면을 누르면 멈춰요)', tourOff: '투어 종료',
+    gameStart: '기차 찾기 시작! 🎮', gameEnd: n => `게임 끝! 맞힌 기차 ${n}대 ⭐`,
+    gameFind: n => `🔍 "${n}" 기차를 찾아 터치!`,
+    gameYes: '정답이에요! 🎉', gameNo: n => `아니에요, 그건 "${n}" 🚂`,
   },
   ja: {
     title: '🚉 東京駅 鉄道シミュレーター',
     sub: '画面をドラッグして見回そう · 電車をタッチでプッ！',
-    follow: '追跡', sat: '衛星', plat: 'ホーム', wide: '全景',
+    follow: '追跡', tour: 'ツアー', game: 'ゲーム', sat: '衛星', plat: 'ホーム', wide: '全景',
     night: '昼/夜', sound: '音', lang: '日本語',
     qlow: '低負荷', qmed: '標準', qhigh: '高画質',
     ovTitle: '東京駅 電車ウォッチング',
@@ -2256,6 +2348,10 @@ const STR = {
     qLowMsg: '低負荷モード（影・ディテール オフ）', qMedMsg: '標準画質', qHighMsg: '高画質モード',
     langMsg: '日本語',
     cameo: n => `${n}番ホームのどこかに親子とネコがいます！🐱🚼`,
+    tourOn: 'シネマツアー開始 🎬（画面タッチで停止）', tourOff: 'ツアー終了',
+    gameStart: 'でんしゃさがし スタート！🎮', gameEnd: n => `おわり！せいかい ${n}だい ⭐`,
+    gameFind: n => `🔍「${n}」をさがしてタッチ！`,
+    gameYes: 'せいかい！🎉', gameNo: n => `ちがうよ、それは「${n}」🚂`,
   },
 };
 let lang = (navigator.language || 'ko').toLowerCase().startsWith('ja') ? 'ja' : 'ko';
@@ -2267,13 +2363,15 @@ function relabel() {
   const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
   set('hud-sub', L.sub);
   document.querySelector('#hud .title').textContent = L.title;
-  set('lbl-follow', L.follow); set('lbl-sat', L.sat); set('lbl-plat', L.plat);
+  set('lbl-follow', L.follow); set('lbl-tour', L.tour); set('lbl-game', L.game);
+  set('lbl-sat', L.sat); set('lbl-plat', L.plat);
   set('lbl-wide', L.wide); set('lbl-night', L.night); set('lbl-sound', L.sound);
   set('lbl-lang', L.lang);
   set('lbl-qlow', L.qlow); set('lbl-qmed', L.qmed); set('lbl-qhigh', L.qhigh);
   set('ov-title', L.ovTitle); set('ov-start', L.start);
   document.getElementById('ov-desc').innerHTML = L.ovDesc;
   views.sat.label = L.vSat; views.plat.label = L.vPlat; views.wide.label = L.vWide;
+  if (typeof gameOn !== 'undefined' && gameOn) showGamePrompt();
 }
 
 const views = {
@@ -2282,7 +2380,6 @@ const views = {
   wide: { pos: [-115, 62, 170], target: [0, DECK + 4, -10], label: '전경 뷰 🏙️' },
 };
 
-let followIdx = -1;
 const _fp = { x: 0, z: 0, yaw: 0 };
 const followAnchor = new THREE.Vector3();
 
@@ -2295,19 +2392,19 @@ function snapToTrain(t) {
   controls.target.copy(followAnchor);
 }
 
-function followNext() {
-  const candidates = trains.filter(t => t.group.visible);
-  if (!candidates.length) { toast(L.noTrain); return; }
-  followIdx++;
-  if (followIdx >= candidates.length) {      // cycled past the last train
-    followIdx = -1;
+// follow is a simple ON/OFF toggle; turning it on grabs a RANDOM
+// train that is currently in the scene
+function followToggle() {
+  if (followTrain) {                 // toggle OFF
     followTrain = null;
     toast(L.followOff);
     setActiveBtn();
     return;
   }
-  followTrain = candidates[followIdx];
-  camAnim = null;
+  const candidates = trains.filter(t => t.group.visible);
+  if (!candidates.length) { toast(L.noTrain); return; }
+  followTrain = candidates[(Math.random() * candidates.length) | 0];
+  camAnim = null; tourStop();
   snapToTrain(followTrain);
   toast(L.following(tname(followTrain)));
   setActiveBtn();
@@ -2318,10 +2415,12 @@ function followNext() {
 // (and the view preset buttons) never break the follow
 function updateFollow() {
   if (!followTrain) return;
-  if (!followTrain.group.visible) {
-    const next = trains.find(t => t.group.visible);
-    if (next) { followTrain = next; snapToTrain(next); toast(L.followingShort(tname(next))); }
-    else { followTrain = null; followIdx = -1; setActiveBtn(); return; }
+  if (!followTrain.group.visible) {     // it left the scene → grab another at random
+    const cands = trains.filter(t => t.group.visible);
+    if (cands.length) {
+      const next = cands[(Math.random() * cands.length) | 0];
+      followTrain = next; snapToTrain(next); toast(L.followingShort(tname(next)));
+    } else { followTrain = null; setActiveBtn(); return; }
   }
   const t = followTrain;
   t.route.posAt(t.sHead - 4, _fp);
@@ -2329,6 +2428,69 @@ function updateFollow() {
   camera.position.x += dx; camera.position.z += dz;
   controls.target.x += dx; controls.target.z += dz;
   followAnchor.set(_fp.x, DECK + 2.5, _fp.z);
+}
+
+/* ================================================================
+   Cinematic auto-tour (item 8) — drifts between scenic waypoints,
+   loops, and stops the moment the user touches the screen
+================================================================ */
+let tourOn = false, tourIdx = -1, tourDwell = 0;
+const TOUR = [
+  { pos: [-94, DECK + 26, 100], target: [-62, DECK + 24, 86] },   // south dome
+  { pos: [-94, DECK + 26, -100], target: [-62, DECK + 24, -86] }, // north dome
+  { pos: [-104, DECK + 30, 0], target: [-62, DECK + 16, 0] },     // grand front
+  { pos: [-16, DECK + 3.4, 70], target: [-16, DECK + 3, -70] },   // platform walk
+  { pos: [66, DECK + 14, 130], target: [40, DECK + 5, 50] },      // shinkansen
+  { pos: [6, 330, 40], target: [6, 0, 0] },                       // satellite
+  { pos: [-115, 62, 170], target: [0, DECK + 4, -10] },           // grand wide
+];
+function tourStop() { if (tourOn) { tourOn = false; if (btns.tour) btns.tour.classList.remove('active'); } }
+function tourToggle() {
+  tourOn = !tourOn;
+  btns.tour.classList.toggle('active', tourOn);
+  if (tourOn) { followTrain = null; setActiveBtn(); tourIdx = -1; tourDwell = 0; toast(L.tourOn); }
+  else toast(L.tourOff);
+}
+function updateTour(dt) {
+  if (!tourOn || camAnim) return;
+  tourDwell -= dt;
+  if (tourDwell <= 0) {
+    tourIdx = (tourIdx + 1) % TOUR.length;
+    const w = TOUR[tourIdx];
+    const wasTour = true;
+    flyTo(w.pos, w.target, 3.2);   // flyTo clears followTrain; keep touring
+    tourOn = wasTour;
+    tourDwell = 4.4;
+  }
+}
+
+/* ================================================================
+   Find-the-train game (item 7) — kid-friendly: a line is named, tap
+   the matching train to score; wrong taps just say what it was
+================================================================ */
+let gameOn = false, gameTarget = null, gameScore = 0;
+function gamePick() {
+  const vis = trains.filter(t => t.group.visible);
+  const pool = vis.length ? vis : trains;
+  gameTarget = pool[(Math.random() * pool.length) | 0].typeKey;
+  showGamePrompt();
+}
+function showGamePrompt() {
+  const nm = lang === 'ja' ? trainTypes[gameTarget].nameJa : trainTypes[gameTarget].name;
+  document.getElementById('hud-sub').textContent = L.gameFind(nm) + '  ⭐' + gameScore;
+}
+function gameToggle() {
+  gameOn = !gameOn;
+  btns.game.classList.toggle('active', gameOn);
+  if (gameOn) { gameScore = 0; gamePick(); toast(L.gameStart); }
+  else { document.getElementById('hud-sub').textContent = L.sub; toast(L.gameEnd(gameScore)); }
+}
+function gameGuess(t) {
+  if (t.typeKey === gameTarget) {
+    gameScore++; toast(L.gameYes); sound.horn(!!t.type.shink); gamePick();
+  } else {
+    toast(L.gameNo(lang === 'ja' ? t.type.nameJa : t.type.name));
+  }
 }
 
 /* ================================================================
@@ -2345,6 +2507,8 @@ function toast(msg) {
 
 const btns = {
   follow: document.getElementById('btn-follow'),
+  tour: document.getElementById('btn-tour'),
+  game: document.getElementById('btn-game'),
   sat: document.getElementById('btn-sat'),
   plat: document.getElementById('btn-plat'),
   wide: document.getElementById('btn-wide'),
@@ -2361,7 +2525,9 @@ btns.lang.addEventListener('click', () => {
   toast(L.langMsg);
 });
 relabel();   // apply the detected system language at startup
-btns.follow.addEventListener('click', followNext);
+btns.follow.addEventListener('click', followToggle);
+btns.tour.addEventListener('click', tourToggle);
+btns.game.addEventListener('click', gameToggle);
 // view presets keep following: while a train is followed they just
 // reposition the camera relative to it
 function viewBtn(view, followOff) {
@@ -2396,7 +2562,9 @@ document.querySelectorAll('#quality button').forEach(b =>
 
 document.addEventListener('keydown', e => {
   if (e.code === 'KeyT') btns.night.click();
-  if (e.code === 'KeyF') followNext();
+  if (e.code === 'KeyF') followToggle();
+  if (e.code === 'KeyC') btns.tour.click();
+  if (e.code === 'KeyG') btns.game.click();
   if (e.code === 'Digit1') btns.wide.click();
   if (e.code === 'Digit2') btns.sat.click();
   if (e.code === 'Digit3') btns.plat.click();
@@ -2411,6 +2579,7 @@ let downPos = null, dragged = false;
 renderer.domElement.addEventListener('pointerdown', e => {
   downPos = [e.clientX, e.clientY];
   dragged = false;
+  tourStop();          // any touch ends the cinematic tour
 });
 renderer.domElement.addEventListener('pointermove', e => {
   if (downPos && Math.hypot(e.clientX - downPos[0], e.clientY - downPos[1]) > 8)
@@ -2432,6 +2601,7 @@ renderer.domElement.addEventListener('pointerup', e => {
   for (const t of all) {
     if (!t.group.visible) continue;
     if (raycaster.intersectObject(t.group, true).length) {
+      if (gameOn) { gameGuess(t); return; }
       sound.horn(!!t.type.shink);
       toast(L.horn(tname(t)));
       return;
@@ -2575,13 +2745,35 @@ new THREE.TextureLoader().load(
   }
 );
 
+// drive the station clock hands from the real time
+function updateClock() {
+  const cl = station.userData.clock; if (!cl) return;
+  const now = new Date();
+  const m = now.getMinutes() + now.getSeconds() / 60;
+  const h = (now.getHours() % 12) + m / 60;
+  cl.minute.rotation.z = -m / 60 * Math.PI * 2;
+  cl.hour.rotation.z = -h / 12 * Math.PI * 2;
+}
+
+// item 9 — throttle the heavy occlusion/signal passes to ~12 Hz and
+// pause rendering entirely while the tab is hidden (saves battery)
+let slowAcc = 0;
+let paused = false;
+document.addEventListener('visibilitychange', () => {
+  paused = document.hidden;
+  if (!paused) { clock.getDelta(); requestAnimationFrame(animate); }
+});
+
 const clock = new THREE.Clock();
 function animate() {
+  if (paused) return;
   const dt = Math.min(clock.getDelta(), 0.05);
   for (const t of trains) updateTrain(t, dt);
-  updateSignals();
   updateDayNight(dt);
-  updateFades(dt);
+  updateClock();
+  slowAcc += dt;
+  if (slowAcc >= 0.08) { updateSignals(); updateFades(slowAcc); slowAcc = 0; }
+  updateTour(dt);
   for (const bb of billboards)
     bb.rotation.y = Math.atan2(camera.position.x - bb.userData.cx,
                                camera.position.z - bb.userData.cz);
