@@ -85,7 +85,6 @@
 
 <div class="btn-col">
   <button class="ui-btn" id="btn-follow" title="기차 따라가기">🚆<small id="lbl-follow">따라가기</small></button>
-  <button class="ui-btn" id="btn-tour"   title="시네마틱 투어">🎬<small id="lbl-tour">투어</small></button>
   <button class="ui-btn" id="btn-game"   title="기차 찾기 게임">🎮<small id="lbl-game">게임</small></button>
   <button class="ui-btn" id="btn-sat"    title="위성 뷰">🛰️<small id="lbl-sat">위성</small></button>
   <button class="ui-btn" id="btn-plat"   title="승강장 뷰">🚉<small id="lbl-plat">승강장</small></button>
@@ -2304,7 +2303,7 @@ const STR = {
   ko: {
     title: '🚉 도쿄역 철도 시뮬레이터',
     sub: '화면을 드래그해서 둘러보세요 · 기차를 터치하면 빵!',
-    follow: '따라가기', tour: '투어', game: '게임', sat: '위성', plat: '승강장', wide: '전경',
+    follow: '따라가기', game: '게임', sat: '위성', plat: '승강장', wide: '전경',
     night: '낮/밤', sound: '소리', lang: '한국어',
     qlow: '저사양', qmed: '보통', qhigh: '고화질',
     ovTitle: '도쿄역 기차 구경',
@@ -2322,7 +2321,6 @@ const STR = {
     qLowMsg: '저사양 모드 (그림자·디테일 끔)', qMedMsg: '보통 화질', qHighMsg: '고화질 모드',
     langMsg: '한국어',
     cameo: n => `${n}번 승강장 어딘가에 가족과 고양이가 있어요! 🐱🚼`,
-    tourOn: '시네마틱 투어 시작 🎬 (화면을 누르면 멈춰요)', tourOff: '투어 종료',
     gameStart: '기차 찾기 시작! 🎮', gameEnd: n => `게임 끝! 맞힌 기차 ${n}대 ⭐`,
     gameFind: n => `🔍 "${n}" 기차를 찾아 터치!`,
     gameYes: '정답이에요! 🎉', gameNo: n => `아니에요, 그건 "${n}" 🚂`,
@@ -2330,7 +2328,7 @@ const STR = {
   ja: {
     title: '🚉 東京駅 鉄道シミュレーター',
     sub: '画面をドラッグして見回そう · 電車をタッチでプッ！',
-    follow: '追跡', tour: 'ツアー', game: 'ゲーム', sat: '衛星', plat: 'ホーム', wide: '全景',
+    follow: '追跡', game: 'ゲーム', sat: '衛星', plat: 'ホーム', wide: '全景',
     night: '昼/夜', sound: '音', lang: '日本語',
     qlow: '低負荷', qmed: '標準', qhigh: '高画質',
     ovTitle: '東京駅 電車ウォッチング',
@@ -2348,7 +2346,6 @@ const STR = {
     qLowMsg: '低負荷モード（影・ディテール オフ）', qMedMsg: '標準画質', qHighMsg: '高画質モード',
     langMsg: '日本語',
     cameo: n => `${n}番ホームのどこかに親子とネコがいます！🐱🚼`,
-    tourOn: 'シネマツアー開始 🎬（画面タッチで停止）', tourOff: 'ツアー終了',
     gameStart: 'でんしゃさがし スタート！🎮', gameEnd: n => `おわり！せいかい ${n}だい ⭐`,
     gameFind: n => `🔍「${n}」をさがしてタッチ！`,
     gameYes: 'せいかい！🎉', gameNo: n => `ちがうよ、それは「${n}」🚂`,
@@ -2363,7 +2360,7 @@ function relabel() {
   const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
   set('hud-sub', L.sub);
   document.querySelector('#hud .title').textContent = L.title;
-  set('lbl-follow', L.follow); set('lbl-tour', L.tour); set('lbl-game', L.game);
+  set('lbl-follow', L.follow); set('lbl-game', L.game);
   set('lbl-sat', L.sat); set('lbl-plat', L.plat);
   set('lbl-wide', L.wide); set('lbl-night', L.night); set('lbl-sound', L.sound);
   set('lbl-lang', L.lang);
@@ -2404,7 +2401,7 @@ function followToggle() {
   const candidates = trains.filter(t => t.group.visible);
   if (!candidates.length) { toast(L.noTrain); return; }
   followTrain = candidates[(Math.random() * candidates.length) | 0];
-  camAnim = null; tourStop();
+  camAnim = null;
   snapToTrain(followTrain);
   toast(L.following(tname(followTrain)));
   setActiveBtn();
@@ -2428,40 +2425,6 @@ function updateFollow() {
   camera.position.x += dx; camera.position.z += dz;
   controls.target.x += dx; controls.target.z += dz;
   followAnchor.set(_fp.x, DECK + 2.5, _fp.z);
-}
-
-/* ================================================================
-   Cinematic auto-tour (item 8) — drifts between scenic waypoints,
-   loops, and stops the moment the user touches the screen
-================================================================ */
-let tourOn = false, tourIdx = -1, tourDwell = 0;
-const TOUR = [
-  { pos: [-94, DECK + 26, 100], target: [-62, DECK + 24, 86] },   // south dome
-  { pos: [-94, DECK + 26, -100], target: [-62, DECK + 24, -86] }, // north dome
-  { pos: [-104, DECK + 30, 0], target: [-62, DECK + 16, 0] },     // grand front
-  { pos: [-16, DECK + 3.4, 70], target: [-16, DECK + 3, -70] },   // platform walk
-  { pos: [66, DECK + 14, 130], target: [40, DECK + 5, 50] },      // shinkansen
-  { pos: [6, 330, 40], target: [6, 0, 0] },                       // satellite
-  { pos: [-115, 62, 170], target: [0, DECK + 4, -10] },           // grand wide
-];
-function tourStop() { if (tourOn) { tourOn = false; if (btns.tour) btns.tour.classList.remove('active'); } }
-function tourToggle() {
-  tourOn = !tourOn;
-  btns.tour.classList.toggle('active', tourOn);
-  if (tourOn) { followTrain = null; setActiveBtn(); tourIdx = -1; tourDwell = 0; toast(L.tourOn); }
-  else toast(L.tourOff);
-}
-function updateTour(dt) {
-  if (!tourOn || camAnim) return;
-  tourDwell -= dt;
-  if (tourDwell <= 0) {
-    tourIdx = (tourIdx + 1) % TOUR.length;
-    const w = TOUR[tourIdx];
-    const wasTour = true;
-    flyTo(w.pos, w.target, 3.2);   // flyTo clears followTrain; keep touring
-    tourOn = wasTour;
-    tourDwell = 4.4;
-  }
 }
 
 /* ================================================================
@@ -2507,7 +2470,6 @@ function toast(msg) {
 
 const btns = {
   follow: document.getElementById('btn-follow'),
-  tour: document.getElementById('btn-tour'),
   game: document.getElementById('btn-game'),
   sat: document.getElementById('btn-sat'),
   plat: document.getElementById('btn-plat'),
@@ -2526,7 +2488,6 @@ btns.lang.addEventListener('click', () => {
 });
 relabel();   // apply the detected system language at startup
 btns.follow.addEventListener('click', followToggle);
-btns.tour.addEventListener('click', tourToggle);
 btns.game.addEventListener('click', gameToggle);
 // view presets keep following: while a train is followed they just
 // reposition the camera relative to it
@@ -2563,7 +2524,6 @@ document.querySelectorAll('#quality button').forEach(b =>
 document.addEventListener('keydown', e => {
   if (e.code === 'KeyT') btns.night.click();
   if (e.code === 'KeyF') followToggle();
-  if (e.code === 'KeyC') btns.tour.click();
   if (e.code === 'KeyG') btns.game.click();
   if (e.code === 'Digit1') btns.wide.click();
   if (e.code === 'Digit2') btns.sat.click();
@@ -2579,7 +2539,6 @@ let downPos = null, dragged = false;
 renderer.domElement.addEventListener('pointerdown', e => {
   downPos = [e.clientX, e.clientY];
   dragged = false;
-  tourStop();          // any touch ends the cinematic tour
 });
 renderer.domElement.addEventListener('pointermove', e => {
   if (downPos && Math.hypot(e.clientX - downPos[0], e.clientY - downPos[1]) > 8)
@@ -2620,20 +2579,9 @@ overlay.addEventListener('click', () => {
 /* ================================================================
    Boot
 ================================================================ */
-function startTrains() {
-  // N700 stabled on the Shinkansen storage track. Car 0 carries the +z
-  // nose, so it must sit at the +z END of the consist — placing it
-  // first used to bury both noses inside the train (the "headless"
-  // parked N700 bug).
-  parkedTrain = buildTrain('tokaido');
-  for (let i = 0; i < parkedTrain.cars.length; i++) {
-    const z = 18 - i * (CAR_LEN + CAR_GAP);
-    parkedTrain.cars[i].position.set(LINES_X.TKP + bendFor(BOW_W.TKP, z), DECK, z);
-    parkedTrain.cars[i].rotation.y = Math.atan2(bendFor(BOW_W.TKP, z + 1) - bendFor(BOW_W.TKP, z), 1);
-  }
-  scene.add(parkedTrain.group);
-}
-startTrains();   // present from the very first frame (procedural skin)
+// (the always-parked N700 on the storage siding was removed — it read
+// as a stuck/bugged train. The Tokaido N700 still arrives & departs
+// normally on its terminal tracks.)
 
 let currentQuality = likelyLowEnd ? 'med' : 'high';
 
@@ -2668,8 +2616,6 @@ new THREE.TextureLoader().load(atlasData, (atlas) => {
         placeCars(t);
       }
     }
-    if (parkedTrain) scene.remove(parkedTrain.group);
-    startTrains();
     setTrainDetail(qualities[currentQuality].detail);
   }
 
@@ -2773,7 +2719,6 @@ function animate() {
   updateClock();
   slowAcc += dt;
   if (slowAcc >= 0.08) { updateSignals(); updateFades(slowAcc); slowAcc = 0; }
-  updateTour(dt);
   for (const bb of billboards)
     bb.rotation.y = Math.atan2(camera.position.x - bb.userData.cx,
                                camera.position.z - bb.userData.cz);
