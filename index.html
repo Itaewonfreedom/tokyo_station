@@ -1266,116 +1266,109 @@ const WIRE_CONTACT = DECK + 6.0; // contact wire (what the pantograph touches)
 scene.add(detailGroup);
 
 /* ================================================================
-   Station props — vending machines, benches, waiting passengers on the
-   platforms, and a taxi rank at the Marunouchi front. All parented to
-   detailGroup so they switch off in the low-quality preset.
+   Station props — vending machines, benches, waiting passengers and a
+   Marunouchi taxi rank. Built with InstancedMesh / merged geometry so
+   the whole lot is only a handful of draw calls, parented to
+   detailGroup (off in the low preset) and distance-culled in animate.
 ================================================================ */
+const props = new THREE.Group();
+detailGroup.add(props);
 {
-  const props = new THREE.Group();
-  detailGroup.add(props);
   const prng = (() => { let s = 99173; return () => (s = s * 16807 % 2147483647) / 2147483647; })();
-  const surf = DECK + 1.1;                       // platform walking surface
+  const surf = DECK + 1.1;
+  const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler();
+  const _p2 = new THREE.Vector3(), _s = new THREE.Vector3(1, 1, 1);
+  const mat4 = (x, y, z, ry = 0) => { _e.set(0, ry, 0); _q.setFromEuler(_e); _p2.set(x, y, z); return _m.compose(_p2, _q, _s).clone(); };
 
-  // ---- vending machine: coloured body + glowing display front ----
-  const vendColors = [0xd33b34, 0x2b6fd0, 0xe8e8e8, 0x16a34a, 0xf0a000];
-  const vendDisp = new THREE.MeshStandardMaterial({ color: 0xbfe6ff, emissive: 0x88c0e6, emissiveIntensity: 0.5, roughness: 0.4 });
-  const vendDark = new THREE.MeshStandardMaterial({ color: 0x20242a, roughness: 0.8 });
-  function vending(x, z, ry, col) {
-    const g = new THREE.Group();
-    const body = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.9, 0.72),
-      new THREE.MeshStandardMaterial({ color: col, roughness: 0.5, metalness: 0.1 }));
-    body.position.y = 0.95; body.castShadow = true; g.add(body);
-    const disp = new THREE.Mesh(new THREE.BoxGeometry(0.62, 1.0, 0.04), vendDisp);
-    disp.position.set(0.12, 1.15, 0.37); g.add(disp);
-    const tray = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.18, 0.06), vendDark);
-    tray.position.set(0, 0.45, 0.37); g.add(tray);
-    g.position.set(x, surf, z); g.rotation.y = ry;
-    props.add(g);
-  }
-
-  // ---- bench ----
-  const benchMat = new THREE.MeshStandardMaterial({ color: 0x4a6e8a, roughness: 0.6, metalness: 0.3 });
-  function bench(x, z, ry) {
-    const g = new THREE.Group();
-    const seat = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.12, 0.55), benchMat);
-    seat.position.y = 0.45; seat.castShadow = true; g.add(seat);
-    const back = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.5, 0.1), benchMat);
-    back.position.set(0, 0.72, -0.22); g.add(back);
-    for (const sx of [-1, 1]) {
-      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.45, 0.5), vendDark);
-      leg.position.set(sx * 1.0, 0.22, 0); g.add(leg);
-    }
-    g.position.set(x, surf, z); g.rotation.y = ry;
-    props.add(g);
-  }
-
-  // ---- waiting passengers: cheap cross-plane silhouette billboards ----
-  const personCanvas = (() => {
-    const c = document.createElement('canvas'); c.width = 64; c.height = 128;
-    const g = c.getContext('2d'); g.fillStyle = '#ffffff';
-    g.beginPath(); g.arc(32, 22, 11, 0, 7); g.fill();          // head
-    g.beginPath(); g.moveTo(18, 44); g.lineTo(46, 44);
-    g.quadraticCurveTo(52, 88, 45, 126); g.lineTo(19, 126);
-    g.quadraticCurveTo(12, 88, 18, 44); g.fill();              // body
-    return c;
-  })();
-  const personTex = new THREE.CanvasTexture(personCanvas);
-  personTex.colorSpace = THREE.SRGBColorSpace;
-  const personGeo = new THREE.PlaneGeometry(0.85, 1.7);
-  const personColors = [0x33455f, 0x7a3b3b, 0x3b5e44, 0x5a4a6e, 0x444851, 0x8a6a3a];
-  function person(x, z) {
-    const mat = new THREE.MeshBasicMaterial({
-      map: personTex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide,
-      color: personColors[(prng() * personColors.length) | 0],
-    });
-    const g = new THREE.Group();
-    for (const r of [0, Math.PI / 2]) {
-      const pl = new THREE.Mesh(personGeo, mat); pl.rotation.y = r; g.add(pl);
-    }
-    g.position.set(x, surf + 0.85, z);
-    g.rotation.y = prng() * Math.PI * 2;
-    props.add(g);
-  }
-
-  // scatter the platform furniture down each island
+  // collect instance transforms first
+  const vendM = [], vendCol = [], dispM = [], benchM = [], personM = [], personCol = [];
+  const VEND_COLS = [0xd33b34, 0x2b6fd0, 0xe8e8e8, 0x16a34a, 0xf0a000];
+  const PERSON_COLS = [0x33455f, 0x7a3b3b, 0x3b5e44, 0x5a4a6e, 0x444851, 0x8a6a3a];
   PLATFORMS.forEach((p) => {
     const cx = z => p.x + bendFor(p.bw, z);
-    vending(cx(p.off - 32) + 1.7, p.off - 32, -Math.PI / 2, vendColors[0]);
-    vending(cx(p.off - 30.9) + 1.7, p.off - 30.9, -Math.PI / 2, vendColors[1]);
-    vending(cx(p.off - 29.8) + 1.7, p.off - 29.8, -Math.PI / 2, vendColors[2]);
-    bench(cx(p.off + 18) - 1.4, p.off + 18, Math.PI / 2);
-    bench(cx(p.off - 56) - 1.4, p.off - 56, Math.PI / 2);
+    for (let k = 0; k < 3; k++) {
+      const z = p.off - 32 + k * 1.1, x = cx(z) + 1.7;
+      vendM.push(mat4(x, surf + 0.95, z, -Math.PI / 2));
+      vendCol.push(VEND_COLS[(prng() * VEND_COLS.length) | 0]);
+      dispM.push(mat4(x - 0.37, surf + 1.15, z, -Math.PI / 2));
+    }
+    benchM.push(mat4(cx(p.off + 18) - 1.4, surf, p.off + 18, Math.PI / 2));
+    benchM.push(mat4(cx(p.off - 56) - 1.4, surf, p.off - 56, Math.PI / 2));
     for (const dz of [-64, -12, 34, 70]) {
       const z = p.off + dz + (prng() - 0.5) * 8;
-      person(cx(z) + (prng() - 0.5) * 3.4, z);
+      personM.push(mat4(cx(z) + (prng() - 0.5) * 3.4, surf + 0.85, z, prng() * Math.PI * 2));
+      personCol.push(PERSON_COLS[(prng() * PERSON_COLS.length) | 0]);
     }
   });
 
-  // ---- taxi rank on the Marunouchi (west) plaza ----
+  const insta = (geo, mat, mats, cols) => {
+    const im = new THREE.InstancedMesh(geo, mat, mats.length);
+    const col = cols ? new THREE.Color() : null;
+    mats.forEach((m, i) => { im.setMatrixAt(i, m); if (cols) im.setColorAt(i, col.setHex(cols[i])); });
+    im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true;
+    im.castShadow = true;
+    props.add(im); return im;
+  };
+
+  // vending machines (bodies tinted per-instance) + glowing display panels
+  insta(new THREE.BoxGeometry(1.0, 1.9, 0.72),
+    new THREE.MeshStandardMaterial({ roughness: 0.5, metalness: 0.1 }), vendM, vendCol);
+  insta(new THREE.BoxGeometry(0.04, 1.0, 0.62),
+    new THREE.MeshStandardMaterial({ color: 0xbfe6ff, emissive: 0x88c0e6, emissiveIntensity: 0.5, roughness: 0.4 }), dispM);
+
+  // bench = one merged unit (seat + back + 2 legs), instanced down the platforms
+  {
+    const parts = [
+      new THREE.BoxGeometry(2.4, 0.12, 0.55).translate(0, 0.45, 0),
+      new THREE.BoxGeometry(2.4, 0.5, 0.1).translate(0, 0.72, -0.22),
+      new THREE.BoxGeometry(0.1, 0.45, 0.5).translate(-1.0, 0.22, 0),
+      new THREE.BoxGeometry(0.1, 0.45, 0.5).translate(1.0, 0.22, 0),
+    ];
+    insta(BufferGeometryUtils.mergeGeometries(parts),
+      new THREE.MeshStandardMaterial({ color: 0x4a6e8a, roughness: 0.6, metalness: 0.3 }), benchM);
+  }
+
+  // waiting passengers — one instanced cross-plane silhouette, tinted
+  {
+    const c = document.createElement('canvas'); c.width = 64; c.height = 128;
+    const g = c.getContext('2d'); g.fillStyle = '#ffffff';
+    g.beginPath(); g.arc(32, 22, 11, 0, 7); g.fill();
+    g.beginPath(); g.moveTo(18, 44); g.lineTo(46, 44);
+    g.quadraticCurveTo(52, 88, 45, 126); g.lineTo(19, 126);
+    g.quadraticCurveTo(12, 88, 18, 44); g.fill();
+    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+    const cross = BufferGeometryUtils.mergeGeometries([
+      new THREE.PlaneGeometry(0.85, 1.7),
+      new THREE.PlaneGeometry(0.85, 1.7).rotateY(Math.PI / 2),
+    ]);
+    const pm = insta(cross, new THREE.MeshBasicMaterial({
+      map: tex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide }), personM, personCol);
+    pm.castShadow = false;
+  }
+
+  // ---- Marunouchi taxi rank (only 4 taxis — kept as a small group) ----
   {
     const rank = new THREE.Group();
     const bodyMat = new THREE.MeshStandardMaterial({ color: 0xf2c01e, roughness: 0.4, metalness: 0.3 });
     const lowMat = new THREE.MeshStandardMaterial({ color: 0x16181c, roughness: 0.6 });
     const glassMat = new THREE.MeshStandardMaterial({ color: 0x1a2630, roughness: 0.2, metalness: 0.6 });
     const lampMat = new THREE.MeshStandardMaterial({ color: 0xffcf6a, emissive: 0xffaa33, emissiveIntensity: 0.6 });
-    const wheelGeo = new THREE.CylinderGeometry(0.34, 0.34, 0.24, 10);
-    function taxi(x, z) {
-      const g = new THREE.Group();
-      const lower = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.7, 4.6), lowMat);
-      lower.position.y = 0.55; g.add(lower);
-      const body = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.7, 4.4), bodyMat);
-      body.position.y = 1.1; body.castShadow = true; g.add(body);
-      const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.7, 2.2), glassMat);
-      cabin.position.set(0, 1.65, -0.2); g.add(cabin);
-      const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.22, 0.3), lampMat);
-      lamp.position.set(0, 2.06, -0.2); g.add(lamp);
-      for (const sx of [-0.95, 0.95]) for (const sz of [-1.5, 1.5]) {
-        const w = new THREE.Mesh(wheelGeo, lowMat);
-        w.rotation.z = Math.PI / 2; w.position.set(sx, 0.34, sz); g.add(w);
-      }
-      g.position.set(x, 0, z); rank.add(g);
-    }
-    // canopy over the rank
+    // one merged taxi (everything dark+body baked via two meshes per taxi)
+    const wheelGeo = new THREE.CylinderGeometry(0.34, 0.34, 0.24, 10).rotateZ(Math.PI / 2);
+    const lowerParts = [new THREE.BoxGeometry(2.0, 0.7, 4.6).translate(0, 0.55, 0)];
+    for (const sx of [-0.95, 0.95]) for (const sz of [-1.5, 1.5])
+      lowerParts.push(wheelGeo.clone().translate(sx, 0.34, sz));
+    const lowerUnit = BufferGeometryUtils.mergeGeometries(lowerParts);
+    const bodyUnit = BufferGeometryUtils.mergeGeometries([
+      new THREE.BoxGeometry(2.0, 0.7, 4.4).translate(0, 1.1, 0),
+    ]);
+    const taxiM = [];
+    for (let i = 0; i < 4; i++) taxiM.push(mat4(-82, 0, -6 + i * 6.4));
+    const mk = (geo, mat) => { const im = new THREE.InstancedMesh(geo, mat, 4);
+      taxiM.forEach((m, i) => im.setMatrixAt(i, m)); im.castShadow = true; rank.add(im); };
+    mk(lowerUnit, lowMat); mk(bodyUnit, bodyMat);
+    mk(new THREE.BoxGeometry(1.8, 0.7, 2.2).translate(0, 1.65, -0.2), glassMat);
+    mk(new THREE.BoxGeometry(0.7, 0.22, 0.3).translate(0, 2.06, -0.2), lampMat);
     const canopy = new THREE.Mesh(new THREE.BoxGeometry(6, 0.3, 26),
       new THREE.MeshStandardMaterial({ color: 0x9fb8c4, roughness: 0.7 }));
     canopy.position.set(-82, 4.6, 4); canopy.castShadow = true; rank.add(canopy);
@@ -1383,9 +1376,11 @@ scene.add(detailGroup);
       const post = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 4.6, 8), lowMat);
       post.position.set(cx2, 2.3, cz); rank.add(post);
     }
-    for (let i = 0; i < 4; i++) taxi(-82, -6 + i * 6.4);
     props.add(rank);
   }
+  // static — freeze matrices so three stops re-computing them each frame
+  props.traverse(o => { o.matrixAutoUpdate = false; });
+  props.updateMatrixWorld(true);
 }
 
 /* ================================================================
@@ -1745,6 +1740,9 @@ scene.add(cityNear);
 scene.add(cityFar);
 for (const grp of [cityNear, cityFar])
   for (const b of grp.children) registerFadeable(b);
+// buildings never move — stop three re-deriving their matrices every frame
+for (const grp of [cityNear, cityFar])
+  grp.traverse(o => { o.matrixAutoUpdate = false; });
 
 /* ================================================================
    Trains
@@ -2852,7 +2850,12 @@ function animate() {
   updateDayNight(dt);
   updateClock();
   slowAcc += dt;
-  if (slowAcc >= 0.08) { updateSignals(); updateFades(slowAcc); slowAcc = 0; }
+  if (slowAcc >= 0.08) {
+    updateSignals(); updateFades(slowAcc); slowAcc = 0;
+    // LOD: drop the little platform props from high/satellite views
+    // (where they'd be sub-pixel anyway)
+    props.visible = camera.position.y < 90;
+  }
   for (const bb of billboards)
     bb.rotation.y = Math.atan2(camera.position.x - bb.userData.cx,
                                camera.position.z - bb.userData.cz);
