@@ -118,6 +118,10 @@ panner.panningModel = 'HRTF';
 panner.positionX.value = train.x;  // 매 프레임 열차 위치로 갱신
 ```
 
+> ✅ 아래 보너스 소리(VVVF·레일 울림·신칸센 바람)와 스테레오 정위·거리 감쇠·
+> 리버브도 합성으로 구현 완료 — README "사운드" 참고. (HRTF PannerNode 대신
+> 가벼운 StereoPannerNode 사용)
+
 ### 보너스: 함께 넣으면 좋은 소리
 
 - **VVVF 인버터 가속음** (E235 특유의 우우웅~ 상승음): 톱니파 오실레이터
