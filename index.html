@@ -432,21 +432,6 @@ function canvasTex(w, h, draw, rx = 1, ry = 1) {
   return t;
 }
 
-const ballastTex = canvasTex(256, 256, (g, w, h) => {
-  // brownish track bed like the aerial photo
-  g.fillStyle = '#5b5147'; g.fillRect(0, 0, w, h);
-  for (let i = 0; i < 2600; i++) {
-    const v = 60 + Math.random() * 75;
-    g.fillStyle = `rgb(${v|0},${v*0.9|0},${v*0.78|0})`;
-    g.beginPath();
-    g.arc(Math.random() * w, Math.random() * h, 1 + Math.random() * 2.4, 0, 7);
-    g.fill();
-  }
-  g.fillStyle = 'rgba(30,26,22,.35)';
-  for (let i = 0; i < 12; i++)
-    g.fillRect(Math.random() * w, 0, 2 + Math.random() * 4, h);
-});
-
 const asphaltTex = canvasTex(256, 256, (g, w, h) => {
   g.fillStyle = '#85878a'; g.fillRect(0, 0, w, h);
   for (let i = 0; i < 4000; i++) {
@@ -644,88 +629,6 @@ function e5Roof() {
     g.fillRect(w / 2 - 22, 150, 44, 60);   // vent grilles like the atlas roof
     g.fillStyle = '#10504e';
     for (let y = 156; y < 206; y += 8) g.fillRect(w / 2 - 18, y, 36, 3);
-  });
-}
-
-/* nose skin: u wraps the cross-section ring (0 = belly, 0.5 = top),
-   v runs base→tip. Painted per row so the colour band can widen
-   toward the tip like the real duckbill */
-function noseTex({ top, stripe, bottom, bandBase, bandTip, topFill = true }) {
-  return canvasTex(256, 256, (g, w, h) => {
-    for (let row = 0; row < h; row++) {
-      const v = 1 - row / h;                       // texture v of this row
-      const band = bandBase + (bandTip - bandBase) * v;
-      g.fillStyle = bottom; g.fillRect(0, row, w, 1);
-      if (topFill) {
-        g.fillStyle = top;
-        g.fillRect((0.5 - band) * w, row, band * 2 * w, 1);
-      }
-      g.fillStyle = stripe;
-      g.fillRect((0.5 - band - 0.024) * w, row, 0.024 * w, 1);
-      g.fillRect((0.5 + band) * w, row, 0.024 * w, 1);
-    }
-  });
-}
-const e5NoseTex = e5NoseDetail();
-const n700NoseTex = noseTex({ top: '#eef2f5', stripe: '#1565c0', bottom: '#eef2f5', bandBase: 0.2, bandTip: 0.26 });
-
-/* E5 nose skin following the provided UV sheet: metallic turquoise
-   crown with sheen, pink boundary line, white lower panels, grey
-   under-nose skirt, painted windshield with the 4-lamp cluster and
-   panel seams. u wraps the ring (0.5 = crown), v runs base→tip. */
-function e5NoseDetail() {
-  return canvasTex(512, 512, (g, w, h) => {
-    const bandBase = 0.21, bandTip = 0.32;
-    for (let row = 0; row < h; row++) {
-      const v = 1 - row / h;
-      const band = bandBase + (bandTip - bandBase) * v;
-      g.fillStyle = '#ffffff'; g.fillRect(0, row, w, 1);
-      g.fillStyle = '#d9dcdf';                       // under-nose skirt grey
-      g.fillRect(0, row, 0.075 * w, 1);
-      g.fillRect(w - 0.075 * w, row, 0.075 * w, 1);
-      g.fillStyle = E5_TEAL;
-      g.fillRect((0.5 - band) * w, row, band * 2 * w, 1);
-      g.fillStyle = E5_PINK;
-      g.fillRect((0.5 - band - 0.022) * w, row, 0.022 * w, 1);
-      g.fillRect((0.5 + band) * w, row, 0.022 * w, 1);
-    }
-    // metallic sheen along the crown
-    const sheen = g.createLinearGradient(0.28 * w, 0, 0.72 * w, 0);
-    sheen.addColorStop(0, 'rgba(0,34,36,.20)');
-    sheen.addColorStop(0.5, 'rgba(255,255,255,.16)');
-    sheen.addColorStop(1, 'rgba(0,34,36,.20)');
-    g.fillStyle = sheen; g.fillRect(0.27 * w, 0, 0.46 * w, h);
-    // panel seams: teal crown centreline + base ring + white lower panels
-    g.strokeStyle = 'rgba(6,44,46,.4)'; g.lineWidth = 2;
-    g.beginPath(); g.moveTo(0.5 * w, 0); g.lineTo(0.5 * w, (1 - 0.46) * h); g.stroke();
-    g.beginPath(); g.moveTo(0.3 * w, (1 - 0.035) * h); g.lineTo(0.7 * w, (1 - 0.035) * h); g.stroke();
-    g.strokeStyle = 'rgba(125,134,142,.45)';
-    for (const u of [0.135, 0.865]) {
-      g.beginPath(); g.moveTo(u * w, 0); g.lineTo(u * w, h); g.stroke();
-    }
-    g.beginPath(); g.moveTo(0.075 * w, (1 - 0.5) * h); g.lineTo(0.27 * w, (1 - 0.5) * h); g.stroke();
-    g.beginPath(); g.moveTo(0.73 * w, (1 - 0.5) * h); g.lineTo(0.925 * w, (1 - 0.5) * h); g.stroke();
-    // windshield (#111418 glass per the sheet) — tapered toward the tip
-    const yTip = (1 - 0.45) * h, yBase = (1 - 0.17) * h;
-    g.fillStyle = '#0a0e12';
-    g.beginPath();
-    g.moveTo(0.445 * w, yTip);
-    g.lineTo(0.555 * w, yTip);
-    g.quadraticCurveTo(0.60 * w, yTip + (yBase - yTip) * 0.5, 0.578 * w, yBase);
-    g.quadraticCurveTo(0.5 * w, yBase + 14, 0.422 * w, yBase);
-    g.quadraticCurveTo(0.40 * w, yTip + (yBase - yTip) * 0.5, 0.445 * w, yTip);
-    g.fill();
-    g.strokeStyle = '#111418'; g.lineWidth = 7; g.stroke();
-    // glass reflection streak
-    g.fillStyle = 'rgba(150,205,215,.16)';
-    g.fillRect(0.45 * w, yTip + 14, 0.10 * w, 16);
-    // 4-lamp headlight cluster at the tip edge of the window
-    g.fillStyle = '#fff9e8';
-    for (let i = 0; i < 4; i++) {
-      g.beginPath();
-      g.arc((0.4665 + i * 0.0225) * w, yTip + 9, 5, 0, 7);
-      g.fill();
-    }
   });
 }
 
@@ -1161,7 +1064,7 @@ function funnelStrip(y, mat) {
   for (let z = -Z_END; z <= Z_END; z += 8, i++) {
     const { left, right } = corridorEdges(z);
     pos.push(left, y, z, right, y, z);
-    uv.push(0, z / 6, (right - left) / 6, z / 6);
+    uv.push(left / 4, z / 4, right / 4, z / 4);
     if (i > 0) {
       const a = (i - 1) * 2;
       idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
@@ -1177,9 +1080,9 @@ function funnelStrip(y, mat) {
   scene.add(mesh);
   return mesh;
 }
-// ballast bed on the deck (double-sided so the viaduct never looks hollow)
-funnelStrip(DECK + 0.28, new THREE.MeshStandardMaterial({
-  map: ballastTex, roughness: 1, side: THREE.DoubleSide }));
+// the viaduct's concrete deck (double-sided so it never looks hollow);
+// the ballast beds and slab track are laid on top of it per track
+const deckStrip = () => funnelStrip(DECK + 0.05, deckConcreteMat);
 // concrete soffit closing the underside of the viaduct
 funnelStrip(DECK - 0.55, new THREE.MeshStandardMaterial({
   color: 0x6e6a64, roughness: 1, side: THREE.DoubleSide }));
@@ -1229,46 +1132,316 @@ funnelStrip(DECK - 0.55, new THREE.MeshStandardMaterial({
   }
 }
 
-const railMat = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, roughness: 0.3, metalness: 0.85 });
-const tieMat = new THREE.MeshStandardMaterial({ color: 0x46413b, roughness: 1 });
-const tieGeo = new THREE.BoxGeometry(2.1, 0.12, 0.5);
-const tieMatrices = [];
+/* ================================================================
+   Track bed
+   Tokyo Station's viaduct deck is concrete; each conventional and
+   Tokaido-Shinkansen track sits in its own crushed-stone (ballast) bed
+   with sloping shoulders, and the Tohoku Shinkansen runs on concrete
+   slab track. Heights (above the deck): concrete 0.05, ballast crest
+   0.33, PC sleeper top / rail foot 0.36, rail head 0.53 (= RAIL_Y).
+   · ballast: a procedurally packed tile of angular stones (1.6m square,
+     stones ≈30–65mm) → albedo + normal + roughness maps; in the shader
+     a two-octave macro variation, dirt under the rails, sleeper contact
+     shading, sleepers painted in where there are no 3D sleepers, and a
+     normal map that fades out with distance (no shimmer).
+   · 3D concrete sleepers and full-profile rails near the station; far
+     out the rails use a lighter profile and sleepers are only painted.
+================================================================ */
+const seeded = seed => () => (seed = seed * 16807 % 2147483647) / 2147483647;
+const BALLAST_TILE = 1.6;                 // metres per texture repeat
+const ballastMaps = (() => {
+  const S = 512, rnd = seeded(20260929);
+  const cA = document.createElement('canvas'), cH = document.createElement('canvas');
+  cA.width = cA.height = cH.width = cH.height = S;
+  const gA = cA.getContext('2d'), gH = cH.getContext('2d');
+  gA.fillStyle = '#3d3d3c'; gA.fillRect(0, 0, S, S);          // shadowed gaps
+  gH.fillStyle = '#000'; gH.fillRect(0, 0, S, S);
+  const px = S / BALLAST_TILE / 1000;                           // px per mm
+  const stones = 2600;
+  for (let n = 0; n < stones; n++) {
+    const cx = rnd() * S, cy = rnd() * S;
+    const r = (15 + rnd() * 18) * px;                           // radius 15–33mm
+    const k = 5 + (rnd() * 4 | 0), rot = rnd() * 7, el = 0.65 + rnd() * 0.5;
+    const pts = [];
+    for (let i = 0; i < k; i++) {
+      const a = rot + i / k * Math.PI * 2 + (rnd() - 0.5) * 0.7;
+      const rr = r * (0.72 + rnd() * 0.4);
+      pts.push([Math.cos(a) * rr * el, Math.sin(a) * rr]);
+    }
+    // colour: neutral / silver greys, a few light and a few dark stones,
+    // a hair of warm or cool, never brown
+    const t = rnd();
+    let v = t < 0.05 ? 172 + rnd() * 22 : t < 0.12 ? 84 + rnd() * 14 : 114 + rnd() * 44;
+    const tint = 1.5 + (rnd() - 0.5) * 5;          // a hair warm: dry granite, not blue
+    const col = (m) => `rgb(${Math.min(255, v * m + tint) | 0},${Math.min(255, v * m) | 0},${Math.min(255, v * m - tint * 0.6 + 2) | 0})`;
+    const hTop = 120 + rnd() * 135;
+    for (const ox of [-S, 0, S]) for (const oy of [-S, 0, S]) {    // seamless wrap
+      const X = cx + ox, Y = cy + oy;
+      if (X < -40 || X > S + 40 || Y < -40 || Y > S + 40) continue;
+      const poly = (g, sc, dx = 0, dy = 0) => {
+        g.beginPath();
+        pts.forEach(([x, y], i) => (i ? g.lineTo : g.moveTo).call(g, X + x * sc + dx, Y + y * sc + dy));
+        g.closePath();
+      };
+      // albedo: body, then one lit and one shaded facet (angular read)
+      gA.fillStyle = col(0.9); poly(gA, 1); gA.fill();
+      gA.fillStyle = col(1.04); poly(gA, 0.62, -r * 0.14, -r * 0.14); gA.fill();
+      gA.fillStyle = col(0.97); poly(gA, 0.35, -r * 0.05, -r * 0.1); gA.fill();
+      // height: stepped dome → facets in the normal map
+      gH.fillStyle = `rgb(${hTop * 0.55 | 0},0,0)`; poly(gH, 1); gH.fill();
+      gH.fillStyle = `rgb(${hTop * 0.8 | 0},0,0)`; poly(gH, 0.7, -r * 0.08, -r * 0.05); gH.fill();
+      gH.fillStyle = `rgb(${hTop | 0},0,0)`; poly(gH, 0.38, -r * 0.1, -r * 0.08); gH.fill();
+    }
+  }
+  // normal + roughness from the height field
+  const hd = gH.getImageData(0, 0, S, S).data, ad = gA.getImageData(0, 0, S, S).data;
+  const cN = document.createElement('canvas'), cR = document.createElement('canvas');
+  cN.width = cN.height = cR.width = cR.height = S;
+  const gN = cN.getContext('2d'), gR = cR.getContext('2d');
+  const nI = gN.createImageData(S, S), rI = gR.createImageData(S, S);
+  const h = (x, y) => hd[(((y + S) % S) * S + ((x + S) % S)) * 4] / 255;
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const dx = (h(x + 1, y) - h(x - 1, y)) * 2.2, dy = (h(x, y + 1) - h(x, y - 1)) * 2.2;
+    const l = Math.hypot(dx, dy, 1), o = (y * S + x) * 4;
+    nI.data[o] = (-dx / l * 0.5 + 0.5) * 255; nI.data[o + 1] = (dy / l * 0.5 + 0.5) * 255;
+    nI.data[o + 2] = (1 / l * 0.5 + 0.5) * 255; nI.data[o + 3] = 255;
+    const hv = h(x, y), gap = hv < 0.05;
+    const rough = gap ? 1 : 0.8 + (1 - hv) * 0.15 + ((ad[o] & 7) / 7) * 0.05;
+    rI.data[o] = 0; rI.data[o + 1] = rough * 255; rI.data[o + 2] = 0; rI.data[o + 3] = 255;
+    // gaps a little darker still where deep (contact shadow between stones)
+    if (hv < 0.28) { const k = 0.7 + hv * 1.07; ad[o] *= k; ad[o + 1] *= k; ad[o + 2] *= k; }
+  }
+  gN.putImageData(nI, 0, 0); gR.putImageData(rI, 0, 0);
+  const aI = gA.createImageData(S, S); aI.data.set(ad); gA.putImageData(aI, 0, 0);
+  // the tile's average colour (linear) — what the stones settle into far away
+  let mr = 0, mg = 0, mb = 0;
+  for (let o = 0; o < ad.length; o += 4) { mr += ad[o]; mg += ad[o + 1]; mb += ad[o + 2]; }
+  const cnt = ad.length / 4;
+  const mean = new THREE.Color().setRGB(mr / cnt / 255, mg / cnt / 255, mb / cnt / 255, THREE.SRGBColorSpace);
+  const mk = (c, srgb) => {
+    const t = new THREE.CanvasTexture(c);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+    if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  };
+  return { map: mk(cA, true), normal: mk(cN), rough: mk(cR), mean };
+})();
+
+// board-marked concrete for the deck and the slab track
+const concreteTex = canvasTex(512, 512, (g, w, h) => {
+  const rnd = seeded(771);
+  g.fillStyle = '#8f8e8a'; g.fillRect(0, 0, w, h);
+  for (let i = 0; i < 9000; i++) {
+    const v = 120 + rnd() * 40;
+    g.fillStyle = `rgba(${v | 0},${v | 0},${v - 3 | 0},.35)`;
+    g.fillRect(rnd() * w, rnd() * h, 1 + rnd() * 2, 1 + rnd() * 2);
+  }
+  for (let i = 0; i < 14; i++) {                         // water stains
+    const x = rnd() * w, y = rnd() * h, r = 20 + rnd() * 60;
+    const gr = g.createRadialGradient(x, y, 0, x, y, r);
+    gr.addColorStop(0, 'rgba(60,58,54,.16)'); gr.addColorStop(1, 'rgba(60,58,54,0)');
+    g.fillStyle = gr; g.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+  g.fillStyle = 'rgba(50,50,48,.45)';                    // expansion joints
+  g.fillRect(0, 0, w, 2); g.fillRect(0, 0, 2, h);
+});
+concreteTex.repeat.set(1, 1);
+
+// slab track: 4.95m panels, CA-mortar joints, fastener pads under the rails
+const slabTex = canvasTex(256, 512, (g, w, h) => {
+  const rnd = seeded(4242);
+  g.fillStyle = '#a3a19c'; g.fillRect(0, 0, w, h);
+  for (let i = 0; i < 3000; i++) {
+    const v = 140 + rnd() * 40;
+    g.fillStyle = `rgba(${v | 0},${v | 0},${v - 4 | 0},.3)`;
+    g.fillRect(rnd() * w, rnd() * h, 1.5, 1.5);
+  }
+  g.fillStyle = '#4a4946'; g.fillRect(0, 0, w, 5);        // panel joint
+  // pads at ±0.72m of a 2.34m slab, every 0.625m (8 per 4.95m panel)
+  for (let k = 0; k < 8; k++) {
+    const y = (k + 0.5) / 8 * h;
+    for (const xr of [0.5 - 0.72 / 2.34, 0.5 + 0.72 / 2.34]) {
+      g.fillStyle = '#3a3b3d'; g.fillRect(xr * w - 16, y - 9, 32, 18);
+      g.fillStyle = '#6d6e70'; g.fillRect(xr * w - 22, y - 3, 6, 6); g.fillRect(xr * w + 16, y - 3, 6, 6);
+    }
+  }
+  // a drain groove down the middle, a little grime under the rails
+  g.fillStyle = 'rgba(40,38,34,.35)'; g.fillRect(w / 2 - 3, 0, 6, h);
+  for (const xr of [0.5 - 0.72 / 2.34, 0.5 + 0.72 / 2.34]) {
+    const gr = g.createLinearGradient(xr * w - 26, 0, xr * w + 26, 0);
+    gr.addColorStop(0, 'rgba(70,60,50,0)'); gr.addColorStop(0.5, 'rgba(70,60,50,.28)'); gr.addColorStop(1, 'rgba(70,60,50,0)');
+    g.fillStyle = gr; g.fillRect(xr * w - 26, 0, 52, h);
+  }
+});
+slabTex.repeat.set(1, 1);
+
+const TIE_PITCH = 0.9, TIE_NEAR = 330;     // 3D sleepers within |z| < TIE_NEAR
+const ballastMat = new THREE.MeshStandardMaterial({
+  map: ballastMaps.map, normalMap: ballastMaps.normal, normalScale: new THREE.Vector2(0.9, 0.9),
+  roughnessMap: ballastMaps.rough, roughness: 1, metalness: 0,
+});
+ballastMat.onBeforeCompile = shader => {
+  patchStation(shader);
+  shader.uniforms.uTieNear = { value: TIE_NEAR };
+  shader.uniforms.uMean = { value: ballastMaps.mean };
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', '#include <common>\nattribute vec3 aTrack;\nvarying vec3 vTrack;\nvarying vec3 vWP;')
+    .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\n\tvTrack = aTrack;\n\tvWP = (modelMatrix * vec4(transformed, 1.)).xyz;');
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', `#include <common>
+uniform float uTieNear;
+uniform vec3 uMean;
+varying vec3 vTrack;
+varying vec3 vWP;
+float bhash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float bnoise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f);
+  return mix(mix(bhash(i), bhash(i + vec2(1, 0)), f.x), mix(bhash(i + vec2(0, 1)), bhash(i + vec2(1, 1)), f.x), f.y); }`)
+    .replace('#include <map_fragment>', `
+  vec4 sampledDiffuseColor = texture2D(map, vMapUv);
+  vec3 bc = sampledDiffuseColor.rgb;
+  // distant / grazing ballast settles into its average colour, so single
+  // bright stones can't sparkle as the camera moves
+  float vd = length(vViewPosition);
+  bc = mix(bc, uMean, smoothstep(14., 70., vd) * 0.85);
+  // macro variation: breaks the 1.6m tile, reads as a calm grey far away
+  float mv = bnoise(vWP.xz * 0.09) * 0.6 + bnoise(vWP.xz * 0.41 + 7.3) * 0.4;
+  bc *= 0.84 + 0.3 * mv;
+  float a = abs(vTrack.x), onTrack = vTrack.z;
+  // sleepers: contact shading around them; painted-in beyond the 3D ones
+  float ph = (fract((vTrack.y - ${(TIE_PITCH / 2).toFixed(2)}) / ${TIE_PITCH.toFixed(2)} + 0.5) - 0.5) * ${TIE_PITCH.toFixed(2)};
+  float d = abs(ph), inTie = step(a, 1.0) * onTrack;
+  bc *= mix(1., 0.72 + 0.28 * smoothstep(0.1, 0.3, d), inTie * (1. - smoothstep(0.1, 0.4, fwidth(vTrack.y))));
+  // painted sleepers are anti-aliased: once the 0.9m pitch gets smaller
+  // than a few pixels they fade to their average coverage (no moire)
+  float aa = fwidth(vTrack.y);
+  float tieK = 1. - smoothstep(0.12 - aa, 0.12 + aa, d);
+  tieK = mix(tieK, 0.24 / ${TIE_PITCH.toFixed(2)}, smoothstep(0.08, 0.35, aa));
+  if (abs(vWP.z) > uTieNear) bc = mix(bc, vec3(0.44, 0.43, 0.41) * (0.9 + 0.2 * mv), tieK * inTie);
+  // brake dust / rust under the rails, a slightly oily four-foot
+  float rail = (1. - smoothstep(0.06, 0.3, abs(a - 0.72))) * onTrack;
+  bc = mix(bc, bc * vec3(0.66, 0.6, 0.55), rail * 0.6);
+  bc *= mix(1., 0.9, (1. - smoothstep(0.45, 0.72, a)) * onTrack);
+  diffuseColor *= vec4(bc, 1.);`)
+    .replace('#include <normal_fragment_maps>', THREE.ShaderChunk.normal_fragment_maps
+      .replace('mapN.xy *= normalScale;', 'mapN.xy *= normalScale * (1. - smoothstep(5., 26., length(vViewPosition)));'));
+};
+const slabMat = new THREE.MeshStandardMaterial({ map: slabTex, roughness: 0.92, metalness: 0 });
+const deckConcreteMat = new THREE.MeshStandardMaterial({ map: concreteTex, roughness: 0.95, metalness: 0, side: THREE.DoubleSide });
+const railHeadMat = new THREE.MeshStandardMaterial({ color: 0xc2c6ca, roughness: 0.28, metalness: 0.9 });
+const railWebMat = new THREE.MeshStandardMaterial({ color: 0x5e5048, roughness: 0.85, metalness: 0.25 });
+const tieMat = new THREE.MeshStandardMaterial({ color: 0x7d7b76, roughness: 0.92, metalness: 0 });   // weathered PC sleeper
+const padMat = new THREE.MeshStandardMaterial({ color: 0x3a3b3d, roughness: 0.7, metalness: 0.2 });
+const tieGeo = (() => { const g = new THREE.BoxGeometry(2.0, 0.2, 0.24); g.translate(0, 0.26, 0); return g; })();   // top at 0.36
+const padGeo = (() => { const g = new THREE.BoxGeometry(0.3, 0.06, 0.18); g.translate(0, 0.33, 0); return g; })();  // slab → rail foot
+const tieMatrices = [], padMatrices = [];
 const railBits = [];      // rails + buffers, batched once everything is laid
 const _m4 = new THREE.Matrix4();
 const _eu = new THREE.Euler();
 
-// every rail is laid by sampling an x(z) path — nothing is forced
-// straight, so the global bend and the yard bulge flow through all of it
-function railPath(xFn, z0, z1) {
-  const n = Math.max(8, Math.ceil((z1 - z0) / 3));
-  for (const off of [-GAUGE, GAUGE]) {
-    const pts = [];
+// rail cross-sections (x, y from the foot): near = 60kg-ish profile,
+// far = a 5-face stand-in; each face its own strip (crisp edges)
+const RAIL_NEAR = [[-0.07, 0], [-0.07, 0.015], [-0.011, 0.04], [-0.011, 0.128], [-0.033, 0.14], [-0.033, 0.174],
+                   [0.033, 0.174], [0.033, 0.14], [0.011, 0.128], [0.011, 0.04], [0.07, 0.015], [0.07, 0]];
+const RAIL_FAR = [[-0.07, 0], [-0.033, 0.14], [-0.033, 0.174], [0.033, 0.174], [0.033, 0.14], [0.07, 0]];
+const RAIL_FOOT_Y = 0.36;
+const bedChunks = new Map();          // chunk → { pos, uv, nrm, trk, idx } per material
+function bedBucket(kind, z) {
+  const key = kind + ':' + Math.floor(z / 200);
+  if (!bedChunks.has(key)) bedChunks.set(key, { kind, pos: [], uv: [], trk: [], idx: [] });
+  return bedChunks.get(key);
+}
+// sweep a cross-section along x(z); uv planar in world metres (continuous
+// across neighbouring beds), aTrack = (offset from centreline, distance
+// along, 1 = has sleepers)
+function sweepBed(kind, xFn, z0, z1, prof, yOff, sleepers, uvScale) {
+  const step = 3;
+  for (let za = z0; za < z1 - 0.01; za += 60) {
+    const zb = Math.min(z1, za + 60), B = bedBucket(kind, (za + zb) / 2);
+    const n = Math.max(1, Math.ceil((zb - za) / step)), base = B.pos.length / 3, np = prof.length;
     for (let i = 0; i <= n; i++) {
-      const z = z0 + (z1 - z0) * (i / n);
-      pts.push(new THREE.Vector3(xFn(z) + off, DECK + 0.45, z));
+      const z = za + (zb - za) * i / n, x = xFn(z);
+      for (const [px, py] of prof) {
+        const wx = x + px, wy = DECK + py + yOff;
+        B.pos.push(wx, wy, z);
+        if (uvScale) B.uv.push(wx / uvScale[0], z / uvScale[1]); else B.uv.push((px / (prof[np - 1][0] - prof[0][0])) + 0.5, z / 4.95);
+        B.trk.push(px, z - z0, sleepers ? 1 : 0);
+      }
+      if (i > 0) {
+        const a = base + (i - 1) * np, b = base + i * np;
+        for (let p = 0; p < np - 1; p++) B.idx.push(a + p, b + p, a + p + 1, a + p + 1, b + p, b + p + 1);
+      }
     }
-    const tube = new THREE.Mesh(
-      new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), n, 0.085, 5, false),
-      railMat
-    );
-    scene.add(tube);
-    railBits.push(tube);
   }
-  for (let z = z0 + 0.9; z < z1; z += 1.8) {
+}
+const BED_PROF = [[-2.15, 0.05], [-1.62, 0.33], [1.62, 0.33], [2.15, 0.05]];
+const SLAB_BASE = [[-1.5, 0.05], [-1.42, 0.2], [1.42, 0.2], [1.5, 0.05]];
+const SLAB_TOP = [[-1.17, 0.2], [-1.17, 0.3], [1.17, 0.3], [1.17, 0.2]];
+const SLAB_LINES = new Set(['THS1', 'THS2']);
+
+function railStrips(xFn, z0, z1, off, prof, segLen) {
+  const n = Math.max(2, Math.ceil((z1 - z0) / segLen));
+  const head = [], web = [];
+  for (let e = 0; e < prof.length - 1; e++) {
+    const pos = [], idx = [];
+    for (let i = 0; i <= n; i++) {
+      const z = z0 + (z1 - z0) * i / n, x = xFn(z) + off;
+      for (const q of [prof[e], prof[e + 1]]) pos.push(x + q[0], DECK + RAIL_FOOT_Y + q[1], z);
+      if (i > 0) { const a = (i - 1) * 2; idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3); }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(pos.length / 3 * 2), 2));
+    g.setIndex(idx); g.computeVertexNormals();
+    const top = prof[e][1] > 0.17 && prof[e + 1][1] > 0.17;
+    (top ? head : web).push(g);
+  }
+  for (const [list, mat] of [[head, railHeadMat], [web, railWebMat]]) {
+    const m = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(list), mat);
+    m.receiveShadow = true; scene.add(m); railBits.push(m);
+  }
+}
+// every track is laid by sampling an x(z) path — nothing is forced
+// straight, so the global bend and the yard bulge flow through all of it
+function railPath(xFn, z0, z1, opts = {}) {
+  const slab = !!opts.slab, yOff = opts.under ? -0.004 : 0;
+  // bed
+  if (slab) {
+    sweepBed('slabBase', xFn, z0, z1, SLAB_BASE, yOff, false, [4, 4]);
+    sweepBed('slab', xFn, z0, z1, SLAB_TOP, yOff, false, null);
+  } else sweepBed('ballast', xFn, z0, z1, BED_PROF, yOff, true, [BALLAST_TILE, BALLAST_TILE]);
+  // rails: full profile near the station, light profile beyond
+  for (const off of [-GAUGE, GAUGE]) {
+    const cuts = [z0, Math.max(z0, Math.min(z1, -TIE_NEAR)), Math.max(z0, Math.min(z1, TIE_NEAR)), z1];
+    for (let c = 0; c < 3; c++) {
+      const a = cuts[c], b = cuts[c + 1];
+      if (b - a < 0.5) continue;
+      const near = c === 1;
+      railStrips(xFn, a, b, off, near ? RAIL_NEAR : RAIL_FAR, near ? 4 : 10);
+    }
+  }
+  // sleepers (ballast) or rail pads (slab), near the station only
+  const pitch = slab ? 0.625 : TIE_PITCH;
+  for (let z = z0 + pitch / 2; z < z1; z += pitch) {
+    if (Math.abs(z) > TIE_NEAR) continue;
     const x = xFn(z);
     _eu.set(0, Math.atan2(xFn(z + 0.6) - x, 0.6), 0);
     _m4.makeRotationFromEuler(_eu);
-    _m4.setPosition(x, DECK + 0.36, z);
-    tieMatrices.push(_m4.clone());
+    if (slab) {
+      for (const off of [-GAUGE, GAUGE]) {
+        const m = _m4.clone(); m.setPosition(x + off, DECK + yOff, z); padMatrices.push(m);
+      }
+    } else { _m4.setPosition(x, DECK + yOff, z); tieMatrices.push(_m4.clone()); }
   }
 }
-// decorative crossover blending between two line paths
+// decorative crossover blending between two line paths (laid a hair
+// lower so the through line's bed wins where they overlap)
 function crossRails(lineA, lineB, z0, z1, side) {
   railPath(z => {
     const az = Math.abs(z);
     const k = smooth(Math.min(1, Math.max(0, (az - z0) / (z1 - z0))));
     return lerp(lineXAt(lineA, z), lineXAt(lineB, z), k);
-  }, side < 0 ? -z1 : z0, side < 0 ? -z0 : z1);
+  }, side < 0 ? -z1 : z0, side < 0 ? -z0 : z1, { under: true, slab: SLAB_LINES.has(lineA) });
 }
 
 // buffer stop at the dead end of a terminal track
@@ -1284,14 +1457,14 @@ function addBuffer(x, z) {
 
 // lay every line according to its type
 for (const [l, type] of Object.entries(LINE_DEFS)) {
-  const xFn = z => lineXAt(l, z);
+  const xFn = z => lineXAt(l, z), o = { slab: SLAB_LINES.has(l) };
   if (type === 'T') {
-    railPath(xFn, -Z_END, Z_END);
+    railPath(xFn, -Z_END, Z_END, o);
   } else if (type === 'N') {        // ends at a buffer south of the platform
-    railPath(xFn, -Z_END, BUFFER_Z);
+    railPath(xFn, -Z_END, BUFFER_Z, o);
     addBuffer(lineXAt(l, BUFFER_Z + 0.5), BUFFER_Z + 0.5);
   } else {                          // 'S': ends at a buffer north of the platform
-    railPath(xFn, -BUFFER_Z, Z_END);
+    railPath(xFn, -BUFFER_Z, Z_END, o);
     addBuffer(lineXAt(l, -BUFFER_Z - 0.5), -BUFFER_Z - 0.5);
   }
 }
@@ -1311,12 +1484,40 @@ crossRails('THS1', 'THS2', 117, 137, 1);
 crossRails('CH1', 'CH2', 104, 124, 1);
 
 mergeStatic(railBits, scene, 400);
+// beds: one mesh per material per 200m chunk (frustum culling still works)
+for (const B of bedChunks.values()) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(B.pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(B.uv, 2));
+  g.setAttribute('aTrack', new THREE.Float32BufferAttribute(B.trk, 3));
+  g.setIndex(B.idx);
+  g.computeVertexNormals();
+  const mat = B.kind === 'ballast' ? ballastMat : B.kind === 'slab' ? slabMat : deckConcreteMat;
+  const m = new THREE.Mesh(g, mat);
+  m.receiveShadow = true; m.matrixAutoUpdate = false;
+  scene.add(m);
+}
+deckStrip();
+// sleepers & pads: instanced, split into z-chunks so off-screen ones cull
 {
-  const ties = new THREE.InstancedMesh(tieGeo, tieMat, tieMatrices.length);
-  tieMatrices.forEach((m, i) => ties.setMatrixAt(i, m));
-  ties.instanceMatrix.needsUpdate = true;
-  ties.receiveShadow = true;
-  scene.add(ties);
+  const chunked = (list, geo, mat) => {
+    const by = new Map();
+    for (const m of list) { const k = Math.floor(m.elements[14] / 110); if (!by.has(k)) by.set(k, []); by.get(k).push(m); }
+    const col = new THREE.Color(), rnd = seeded(99);
+    for (const ms of by.values()) {
+      const im = new THREE.InstancedMesh(geo, mat, ms.length);
+      ms.forEach((m, i) => {
+        im.setMatrixAt(i, m);
+        const v = 0.86 + rnd() * 0.2; im.setColorAt(i, col.setRGB(v, v, v * 0.98));   // weathering
+      });
+      im.instanceMatrix.needsUpdate = true;
+      im.receiveShadow = true;
+      im.computeBoundingSphere();
+      scene.add(im);
+    }
+  };
+  chunked(tieMatrices, tieGeo, tieMat);
+  chunked(padMatrices, padGeo, padMat);
 }
 
 /* ================================================================
@@ -2243,8 +2444,8 @@ const PROFILES = {
   e235: { kind: 'c', w: 2.95, wSill: 2.80, sillY: 1.56, beltY: 2.30, gutterY: 3.83, roofY: 4.15, shoulder: 0.44, crown: 0.03, len: 19.5, bogie: 6.9 },
   e233: { kind: 'c', w: 2.95, wSill: 2.80, sillY: 1.56, beltY: 2.30, gutterY: 3.80, roofY: 4.15, shoulder: 0.60, crown: 0.07, len: 19.5, bogie: 6.9 },
   e231: { kind: 'c', w: 2.95, wSill: 2.78, sillY: 1.56, beltY: 2.26, gutterY: 3.83, roofY: 4.16, shoulder: 0.52, crown: 0.05, len: 19.5, bogie: 6.9 },
-  n700: { kind: 's', hw: 1.68, cy: 2.33, hh: 1.80, n: 2.5, m: 2.25, a0: -56, aRoof: 60, len: 25, bogie: 8.75 },
-  e5:   { kind: 's', hw: 1.675, cy: 2.38, hh: 1.80, n: 3.1, m: 2.6, a0: -53, aRoof: 62, len: 25, bogie: 8.75 },
+  n700: { kind: 's', len: 25, bogie: 8.75 },     // intermediate cars; section + lead car in SHINK
+  e5:   { kind: 's', len: 25, bogie: 8.75 },
 };
 const profileCache = {};
 // right half of the section, bottom → crown, split into side / roof parts
@@ -2269,14 +2470,10 @@ function profileOf(key) {
     }
     P.bottomY = P.sillY; P.topY = P.roofY; P.halfW = P.w / 2;
   } else {
-    const pt = deg => {
-      const a = deg * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
-      return [P.hw * Math.sign(c) * Math.abs(c) ** (2 / P.n), P.cy + P.hh * Math.sign(s) * Math.abs(s) ** (2 / P.m)];
-    };
-    for (let d = P.a0; d <= P.aRoof; d += (P.aRoof - P.a0) / 14) side.push(pt(d));
-    for (let d = P.aRoof; d <= 90.001; d += (90 - P.aRoof) / 6) roof.push(pt(d));
-    roof[roof.length - 1] = [0, P.cy + P.hh];
-    P.bottomY = side[0][1]; P.topY = P.cy + P.hh; P.halfW = P.hw;
+    // Shinkansen: the cabin section of the lead-car loft (see SHINK)
+    const sp = shinkProfile(key);
+    side.push(...sp.side); roof.push(...sp.roof);
+    P.bottomY = sp.bottomY; P.topY = roof[roof.length - 1][1]; P.halfW = SHINK[key].body.wMax;
   }
   // the full closed ring (belly → right → crown → left → belly), used by
   // cab faces, end caps and the Shinkansen nose lofts
@@ -2357,78 +2554,304 @@ function cabFaceGeoFor(profKey, texW, texH) {
   return cabFaceCache[k] || (cabFaceCache[k] = makeCabFace(profKey, texW, texH));
 }
 
-/* ---------- Shinkansen noses, lofted from the real body section ----------
-   Every cross-section is the car's own ring, squeezed per height band:
-   N700 "aero double wing" keeps its wide lower wings while the crown
-   drops quickly; E5's 15m nose runs long and flat into a duckbill with a
-   raised cockpit. Built once per type and cached. */
-const NOSE = {
-  // top(t): 1 at the joint → 0 at the tip; a power > 1 keeps the crown
-  // high over the cab and then sweeps down (a convex, not a wedge, line)
-  n700: { len: 10.5, sxBot: t => 1 - 0.3 * t ** 2.3, sxTop: t => 1 - 0.8 * t ** 1.3,
-          top: t => 1 - t ** 1.55, topTip: 1.95, bot: t => t ** 2.6, botTip: 1.0, canopyT: 0.3, tipR: 0.45 },
-  e5:   { len: 15, sxBot: t => 1 - 0.45 * t ** 2.1, sxTop: t => 1 - 0.78 * t ** 1.5,
-          top: t => 1 - t ** 1.3, topTip: 1.72, bot: t => t ** 2.2, botTip: 0.98, canopyT: 0.3, tipR: 0.38 },
+/* ================================================================
+   Shinkansen lead cars — one car, not a body with a nose bolted on.
+   Real proportions (JR East / JR Central published figures):
+     E5  (E523/E514)  lead car 26.5m, nose 15m, intermediate 25m,
+                      width 3.35m, height 3.65m above rail
+     N700 (783/784)   lead car 27.35m, nose 10.7m, intermediate 25m,
+                      width 3.36m, height 3.60m above rail
+   The whole lead car is lofted from cross-sections keyed along the
+   distance s from the tip. Each key is a named section (tip, nose,
+   mid-nose, cab front, cab, cabin) described by: belly height zb,
+   bottom-corner half width wBot, waist (widest) height yW and half
+   width wMax, crown height zt, the lower/upper superellipse exponents,
+   an integrated cockpit canopy (height can, half width cw) and — N700
+   only — the "aero double wing" ridges. Parameters are interpolated
+   with a monotone cubic, so plan view (width) and side view (height)
+   evolve independently and smoothly into the cabin section, which is
+   the SAME section the intermediate cars use.
+================================================================ */
+const SHINK = {
+  e5: {
+    lead: 26.5, noseLen: 15, bogies: [7.4, 26.5 - 3.75], cabEye: [12.4, 3.62],
+    body: { zb: 0.86, wBot: 1.02, yW: 2.42, wMax: 1.675, nB: 2.6, zt: 4.18, nT: 3.1, mT: 3.2, can: 0, cw: 0.8, wing: 0 },
+    keys: [
+      [0.0,  { zb: 1.00, wBot: 0.16, yW: 1.13, wMax: 0.30, nB: 2.0, zt: 1.30, nT: 2.0, mT: 2.0 }],   // coupler-cover tip
+      [0.7,  { zb: 0.91, wBot: 0.46, yW: 1.13, wMax: 0.80, nB: 2.2, zt: 1.47, nT: 2.2, mT: 2.0 }],
+      [2.6,  { zb: 0.87, wBot: 0.80, yW: 1.16, wMax: 1.22, nB: 2.5, zt: 1.70, nT: 2.7, mT: 2.2 }],   // flat duckbill
+      [5.2,  { zb: 0.85, wBot: 0.95, yW: 1.26, wMax: 1.48, nB: 2.6, zt: 2.00, nT: 3.1, mT: 2.4 }],
+      [8.0,  { zb: 0.85, wBot: 1.00, yW: 1.50, wMax: 1.62, zt: 2.40, nT: 3.1, mT: 2.6, can: 0.06, cw: 0.62 }],  // cab front
+      [10.2, { yW: 1.76, wMax: 1.665, zt: 2.78, mT: 2.8, can: 0.44, cw: 0.86 }],
+      [12.6, { yW: 2.06, zt: 3.30, mT: 3.0, can: 0.52, cw: 0.96 }],                               // cab
+      [15.2, { yW: 2.34, zt: 3.96, can: 0.16, cw: 1.1 }],
+      [17.5, {}],                                                                                  // cabin
+    ],
+    wind: { s0: 9.9, s1: 12.5, w0: 0.34, w1: 0.64, down: 0.36 },
+    lamps: [{ s0: 9.35, s1: 9.8, x0: -0.42, x1: 0.42, top: true }],
+  },
+  n700: {
+    lead: 27.35, noseLen: 10.7, bogies: [6.2, 27.35 - 3.75], cabEye: [8.3, 3.55],
+    body: { zb: 0.82, wBot: 1.08, yW: 2.34, wMax: 1.68, nB: 2.2, zt: 4.13, nT: 2.6, mT: 2.4, can: 0, cw: 0.6, wing: 0 },
+    keys: [
+      [0.0,  { zb: 0.99, wBot: 0.22, yW: 1.10, wMax: 0.38, nB: 2.0, zt: 1.28, nT: 2.0, mT: 2.0, wing: 0 }],
+      [0.6,  { zb: 0.90, wBot: 0.58, yW: 1.10, wMax: 0.96, nB: 2.1, zt: 1.42, nT: 2.2, mT: 1.9, wing: 0.03 }],
+      [2.0,  { zb: 0.85, wBot: 0.86, yW: 1.15, wMax: 1.38, nB: 2.2, zt: 1.60, nT: 2.6, mT: 1.9, wing: 0.13 }],
+      [4.0,  { zb: 0.83, wBot: 1.00, yW: 1.26, wMax: 1.58, zt: 1.92, nT: 2.6, mT: 2.0, wing: 0.24 }],   // double wing
+      [6.1,  { zb: 0.82, yW: 1.52, wMax: 1.66, zt: 2.42, mT: 2.1, wing: 0.27, can: 0.08, cw: 0.52 }],  // cab front
+      [8.2,  { yW: 1.88, wMax: 1.68, zt: 3.22, mT: 2.3, wing: 0.13, can: 0.16, cw: 0.6 }],           // cab
+      [10.7, { yW: 2.30, zt: 4.05, wing: 0.0, can: 0.0 }],
+      [12.0, {}],
+    ],
+    wind: { s0: 6.55, s1: 9.25, w0: 0.46, w1: 0.72, down: 0.34 },
+    lamps: [{ s0: 1.45, s1: 2.45, x0: 0.7, x1: 1.22, low: true }, { s0: 1.45, s1: 2.45, x0: -1.22, x1: -0.7, low: true }],
+  },
 };
-const noseGeoCache = {};
-function noseFrame(profKey, t) {
-  const { P } = profileOf(profKey), N = NOSE[profKey];
-  const top = N.topTip + (P.topY - N.topTip) * N.top(t);
-  const bot = P.bottomY + (N.botTip - P.bottomY) * N.bot(t);
-  return { top, bot };
+// fill each key with its predecessor's values (missing → carried on),
+// the last key defaults to the body section
+for (const S of Object.values(SHINK)) {
+  const base = { can: 0, cw: 0.7, wing: 0, ...S.body };
+  let prev = base;
+  const filled = S.keys.map(([s, k]) => [s, prev = { ...prev, ...k }]);
+  filled[filled.length - 1][1] = { ...base };
+  // the first keys must not inherit body values for zb etc. — they define them
+  S.keysF = filled.map(([s, k], i) => [s, i === 0 ? { ...base, ...S.keys[0][1] } : k]);
 }
-function getNoseGeo(profKey) {
-  if (noseGeoCache[profKey]) return noseGeoCache[profKey];
-  const { P, ring } = profileOf(profKey), N = NOSE[profKey], len = N.len;
-  // resample the ring evenly by arc length so the nose skin maps evenly
-  const al = arcLens(ring), tot = al[al.length - 1], R = 32, rs = [];
-  for (let k = 0; k <= R; k++) {
-    const d = tot * k / R;
-    let i = 1; while (i < al.length - 1 && al[i] < d) i++;
-    const f = (d - al[i - 1]) / (al[i] - al[i - 1] || 1);
-    rs.push([lerp(ring[i - 1][0], ring[i][0], f), lerp(ring[i - 1][1], ring[i][1], f)]);
+const SECTION_KEYS = ['zb', 'wBot', 'yW', 'wMax', 'nB', 'zt', 'nT', 'mT', 'can', 'cw', 'wing'];
+// monotone cubic (Fritsch–Carlson) through the keys, per parameter
+function sectionAt(type, s) {
+  const S = SHINK[type], K = S.keysF;
+  if (s >= K[K.length - 1][0]) return S.body;
+  if (s <= 0) return K[0][1];
+  let i = 0; while (K[i + 1][0] < s) i++;
+  const out = {};
+  for (const p of SECTION_KEYS) {
+    const xs = K.map(k => k[0]), ys = K.map(k => k[1][p]);
+    const d = [], m = [];
+    for (let j = 0; j < xs.length - 1; j++) d.push((ys[j + 1] - ys[j]) / (xs[j + 1] - xs[j]));
+    for (let j = 0; j < xs.length; j++) {
+      if (j === 0) m.push(d[0]); else if (j === xs.length - 1) m.push(d[j - 1]);
+      else m.push(d[j - 1] * d[j] <= 0 ? 0 : (d[j - 1] + d[j]) / 2);
+    }
+    for (let j = 0; j < d.length; j++) {
+      if (d[j] === 0) { m[j] = m[j + 1] = 0; continue; }
+      const a = m[j] / d[j], b = m[j + 1] / d[j], h = a * a + b * b;
+      if (h > 9) { const t = 3 / Math.sqrt(h); m[j] = t * a * d[j]; m[j + 1] = t * b * d[j]; }
+    }
+    const h = xs[i + 1] - xs[i], t = (s - xs[i]) / h, t2 = t * t, t3 = t2 * t;
+    out[p] = (2 * t3 - 3 * t2 + 1) * ys[i] + (t3 - 2 * t2 + t) * h * m[i] + (-2 * t3 + 3 * t2) * ys[i + 1] + (t3 - t2) * h * m[i + 1];
   }
-  const segs = 30, pos = [], uvs = [], idx = [];
-  for (let i = 0; i <= segs; i++) {
-    const t = i / segs, { top, bot } = noseFrame(profKey, t);
-    for (let k = 0; k <= R; k++) {
-      const [x, y] = rs[k];
-      const yn = (y - P.bottomY) / (P.topY - P.bottomY);
-      const sx = lerp(N.sxBot(t), N.sxTop(t), smooth(Math.min(1, Math.max(0, yn))));
-      pos.push(x * sx, bot + yn * (top - bot), t * len);
-      uvs.push(k / R, t);
-    }
-  }
-  for (let i = 0; i < segs; i++)
-    for (let k = 0; k < R; k++) {
-      const a = i * (R + 1) + k, b = a + R + 1;
-      idx.push(a, a + 1, b, b, a + 1, b + 1);
-    }
-  // blunt, rounded tip: the last ring shrinks toward its centre along a
-  // quarter circle instead of collapsing to a knife edge
-  const f1 = noseFrame(profKey, 1), cyT = (f1.top + f1.bot) / 2, base = segs * (R + 1);
-  const RT = 4;
-  for (let q = 1; q <= RT; q++) {
-    const th = q / RT * Math.PI / 2, sc = Math.cos(th), dz = N.tipR * Math.sin(th);
-    for (let k = 0; k <= R; k++) {
-      const j = (base + k) * 3;
-      pos.push(pos[j] * sc, cyT + (pos[j + 1] - cyT) * sc, len + dz);
-      uvs.push(k / R, 1);
-    }
-  }
-  for (let i = segs; i < segs + RT; i++)
-    for (let k = 0; k < R; k++) {
-      const a = i * (R + 1) + k, b = a + R + 1;
-      idx.push(a, a + 1, b, b, a + 1, b + 1);
-    }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-  geo.setIndex(idx);
-  geo.computeVertexNormals();
-  return (noseGeoCache[profKey] = geo);
+  return out;
 }
-const noseGlassMat = new THREE.MeshStandardMaterial({ color: 0x0c1116, roughness: 0.15, metalness: 0.55 });
+const NB = 8, NT = 18;           // points on the lower / upper curve
+// right half of a section, belly centre → crown centre; phi-tagged
+function sectionHalf(Q) {
+  const pts = [[0, Q.zb, -1]];
+  for (let k = 0; k <= NB; k++) {
+    const f = k / NB * Math.PI / 2;
+    pts.push([Q.wBot + (Q.wMax - Q.wBot) * Math.sin(f) ** (2 / Q.nB),
+              Q.zb + (Q.yW - Q.zb) * (1 - Math.cos(f) ** (2 / Q.nB)), -1]);
+  }
+  for (let k = 1; k <= NT; k++) {
+    const f = k / NT * Math.PI / 2;
+    const x = k === NT ? 0 : Q.wMax * Math.cos(f) ** (2 / Q.nT);
+    let y = Q.yW + (Q.zt - Q.yW) * Math.sin(f) ** (2 / Q.mT);
+    const up = Math.sin(f) ** 0.5;
+    const r = x / Q.cw;
+    if (Q.can > 0 && r < 1) y += Q.can * (1 - r * r) ** 2 * up;              // cockpit canopy, part of the shell
+    if (Q.wing > 0) y += Q.wing * Math.exp(-((((x / Q.wMax) - 0.6) / 0.17) ** 2)) * up;   // N700 wings
+    pts.push([x, y, k / NT]);
+  }
+  return pts;
+}
+function sectionRing(Q) {
+  const h = sectionHalf(Q);
+  return [...h, ...h.slice(0, -1).reverse().map(([x, y, f]) => [-x, y, f])];
+}
+// the intermediate car profile is the SAME cabin section → no mismatch
+function shinkProfile(type) {
+  const h = sectionHalf(SHINK[type].body);
+  const split = NB + 2 + 9;                       // side strip up to ~the roof shoulder
+  return { side: h.slice(1, split).map(([x, y]) => [x, y]), roof: h.slice(split - 1).map(([x, y]) => [x, y]), bottomY: h[0][1] };
+}
+
+/* ---------- the lofted lead car ----------
+   local frame: tip at z = +L/2, coupled end at -L/2 (car 0 as it runs).
+   uv: u = ring index / (N-1) (0 belly → .5 crown → 1 belly), v = s / L */
+const leadGeoCache = {};
+function leadStations(type) {
+  const S = SHINK[type], st = [];
+  for (let s = 0; s < S.noseLen + 2.5; s += 0.22) st.push(s);
+  for (let s = S.noseLen + 2.5; s < S.lead - 0.01; s += 0.9) st.push(s);
+  st.push(S.lead);
+  return st;
+}
+function leadGeo(type) {
+  if (leadGeoCache[type]) return leadGeoCache[type];
+  const S = SHINK[type], L = S.lead, st = leadStations(type);
+  const pos = [], uv = [], idx = [];
+  let N = 0;
+  const rings = st.map(s => sectionRing(sectionAt(type, s)));
+  N = rings[0].length;
+  // rounded tip: the first ring closes over a quarter circle
+  const tipR = 0.2, first = rings[0];
+  const cy = first.reduce((a, p) => a + p[1], 0) / N;
+  const tipRings = [];
+  for (let q = 4; q >= 1; q--) {
+    const th = q / 4 * Math.PI / 2, sc = Math.cos(th), dz = tipR * Math.sin(th);
+    tipRings.push([-dz, first.map(([x, y, f]) => [x * sc, cy + (y - cy) * sc, f])]);
+  }
+  const all = [...tipRings, ...st.map((s, i) => [s, rings[i]])];
+  for (const [s, ring] of all)
+    ring.forEach(([x, y], k) => { pos.push(x, y, L / 2 - s); uv.push(k / (N - 1), Math.max(0, s) / L); });
+  for (let i = 0; i < all.length - 1; i++)
+    for (let k = 0; k < N - 1; k++) {
+      const a = i * N + k, b = a + N;
+      idx.push(a, b, a + 1, a + 1, b, b + 1);
+    }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  // coupled-end cap
+  const cap = capGeo(rings[rings.length - 1].map(([x, y]) => [x, y]), -L / 2, -1);
+  cap.deleteAttribute('uv'); cap.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(cap.attributes.position.count * 2).fill(0.002), 2));
+  const merged = BufferGeometryUtils.mergeGeometries([g.index ? g.toNonIndexed() : g, cap.toNonIndexed()]);
+  // keep smooth normals of the skin (toNonIndexed keeps them)
+  return (leadGeoCache[type] = { geo: merged, N, stations: st });
+}
+
+/* ---------- skin painted onto the shape ----------
+   Every texel is mapped back to its 3D point on the loft, and the
+   livery / windscreen / lamps / panel seams are decided in 3D, so paint
+   lines follow the real surface (no stretched nose decals). Outputs:
+   albedo, a roughness(G)+metalness(B) map (glass is glossy, paint semi,
+   skirt matte), a bump map for panel seams, and a mask (R = lamp lens,
+   G = passenger-window glow) for the lamp/night shader. */
+const leadSkinCache = {};
+function leadSkin(type) {
+  if (leadSkinCache[type]) return leadSkinCache[type];
+  const S = SHINK[type], L = S.lead, W = 512, H = 1024;
+  const cA = document.createElement('canvas'), cR = document.createElement('canvas'),
+        cB = document.createElement('canvas'), cM = document.createElement('canvas');
+  for (const c of [cA, cR, cB, cM]) { c.width = W; c.height = H; }
+  const gA = cA.getContext('2d'), gR = cR.getContext('2d'), gB = cB.getContext('2d'), gM = cM.getContext('2d');
+  const iA = gA.createImageData(W, H), iR = gR.createImageData(W, H), iB = gB.createImageData(W, H), iM = gM.createImageData(W, H);
+  const hex = h => [(h >> 16) & 255, (h >> 8) & 255, h & 255];
+  const C = type === 'e5'
+    ? { top: hex(0x1ca2a6), top2: hex(0x178c90), line: hex(0xff4fa3), low: hex(0xf6f7f8), skirt: hex(0xd6d9dc) }
+    : { top: hex(0xf3f5f7), top2: hex(0xe9edf0), line: hex(0x0b3a96), low: hex(0xf3f5f7), skirt: hex(0xd4d8dc) };
+  const glass = hex(0x0d1318), frame = hex(0x1a1f24), winC = hex(0x1b2127), doorSeam = hex(0x8a9096);
+  const body = S.body, noseEnd = S.noseLen;
+  const mix = (a, b, k) => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
+  const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  for (let row = 0; row < H; row++) {
+    const s = (row + 0.5) / H * L;       // v = s/L, canvas row 0 = v 0 → flipY off below
+    const Q = sectionAt(type, s), ring = sectionRing(Q), N = ring.length;
+    const topC = Q.zt + Q.can;           // crown incl. canopy
+    for (let col = 0; col < W; col++) {
+      const fi = (col + 0.5) / W * (N - 1), k = Math.min(N - 2, Math.floor(fi)), fr = fi - k;
+      const x = ring[k][0] + (ring[k + 1][0] - ring[k][0]) * fr, y = ring[k][1] + (ring[k + 1][1] - ring[k][1]) * fr;
+      const ax = Math.abs(x);
+      // ---- livery
+      let col3, rough = 0.32, metal = type === 'e5' ? 0.35 : 0.12, bump = 128, lamp = 0, glow = 0;
+      if (type === 'e5') {
+        // teal/white boundary: follows the waist forward and sweeps down the nose flank
+        const yb = Math.min(2.93, Q.yW + 0.36 * (Q.zt - Q.yW)) - 0.02;
+        const pl = 0.1;
+        col3 = y > yb + pl ? mix(C.top2, C.top, sm(yb, topC, y)) : y > yb ? C.line : C.low;
+        if (y <= yb) metal = 0.05;
+      } else {
+        col3 = C.low; metal = 0.1;
+        // blue stripe: under the windows on the body, sweeping down the nose
+        const ys = 2.16 + (Q.yW + 0.02 - 2.16) * (1 - sm(1.5, noseEnd + 2.5, s));
+        const fade = sm(1.2, 2.4, s);
+        if (y > ys && y < ys + 0.15 && fade > 0) col3 = mix(C.low, C.line, fade);
+        if (y > ys - 0.1 && y < ys - 0.065 && fade > 0 && s > noseEnd - 1) col3 = mix(C.low, C.line, fade);
+      }
+      if (y < Q.zb + 0.2) { col3 = C.skirt; rough = 0.7; metal = 0.02; }
+      // ---- windscreen: glass is ONLY here, flush with the shell
+      const Wd = S.wind;
+      if (s > Wd.s0 && s < Wd.s1) {
+        const t = (s - Wd.s0) / (Wd.s1 - Wd.s0), ww = Wd.w0 + (Wd.w1 - Wd.w0) * Math.sin(t * Math.PI / 2);
+        const round = 0.12;
+        const ex = ax - (ww - round), es = Math.min(s - Wd.s0, Wd.s1 - s);
+        const inside = y > topC - Wd.down - 0.02 && ax < ww && !(ex > 0 && es < round && Math.hypot(ex, round - es) > round);
+        const edge = y > topC - Wd.down - 0.1 && ax < ww + 0.08 && s > Wd.s0 - 0.08 && s < Wd.s1 + 0.08;
+        if (edge) { col3 = frame; rough = 0.5; metal = 0.1; bump = 96; }
+        if (inside) { col3 = mix(glass, hex(0x35505e), Math.max(0, 1 - Math.abs(t - 0.35) * 4) * 0.25); rough = 0.06; metal = 0.9; }
+      }
+      // ---- head/tail lamps
+      for (const Lp of S.lamps) {
+        if (s < Lp.s0 || s > Lp.s1 || x < Lp.x0 || x > Lp.x1) continue;
+        if (Lp.top && y < topC - 0.1) continue;
+        if (Lp.low && (y < Q.zb + 0.16 || y > Q.yW + 0.24)) continue;
+        col3 = hex(0x20262c); rough = 0.1; metal = 0.6; bump = 100;
+        const cellL = Lp.top ? 0.21 : 0.3, cx = (x - Lp.x0) / cellL;
+        if (Math.abs(cx - Math.floor(cx) - 0.5) < 0.34) { lamp = 255; col3 = hex(0xe8ecf0); }
+      }
+      // ---- cabin: passenger windows and the door near the coupled end
+      const onSide = ax > Q.wMax * 0.9 && y > 1.6 && y < 3.9;
+      if (onSide && s > noseEnd + 1.2) {
+        const winY = type === 'e5' ? [3.02, 3.34] : [2.4, 2.92];
+        const pitch = type === 'e5' ? 1.02 : 1.04, ww = type === 'e5' ? 0.42 : 0.62;
+        const doorS = L - 1.7;
+        if (Math.abs(s - doorS) < 0.55) {
+          if (Math.abs(Math.abs(s - doorS) - 0.52) < 0.02 && y > 1.8 && y < 3.62) { col3 = doorSeam; bump = 90; }
+          if (Math.abs(s - doorS) < 0.18 && y > 3.02 && y < 3.42) { col3 = winC; rough = 0.08; metal = 0.7; glow = 150; }
+        } else if (s < doorS - 1.1 && y > winY[0] && y < winY[1]) {
+          const u = ((s - noseEnd - 1.6) / pitch) % 1;
+          if (u > 0 && u < ww / pitch) { col3 = winC; rough = 0.08; metal = 0.7; glow = 255; }
+        }
+      }
+      // ---- panel seams: coupler cover, nose/cabin joint, lower access panels
+      if (Math.abs(s - 1.35) < 0.018 && y < Q.zt - 0.05) { bump = 70; col3 = mix(col3, [60, 60, 60], 0.35); }
+      if (Math.abs(s - (noseEnd + 0.6)) < 0.015) { bump = 80; col3 = mix(col3, [70, 70, 70], 0.25); }
+      if (Math.abs(y - (Q.zb + 0.2)) < 0.012 && s < noseEnd) bump = 80;
+      if (y < Q.zb + 0.2 && s > 2 && s < noseEnd && Math.abs(((s - 2) % 2.4) - 1.2) < 0.012) bump = 85;
+      const o = (row * W + col) * 4;
+      iA.data[o] = col3[0]; iA.data[o + 1] = col3[1]; iA.data[o + 2] = col3[2]; iA.data[o + 3] = 255;
+      iR.data[o] = 0; iR.data[o + 1] = rough * 255; iR.data[o + 2] = metal * 255; iR.data[o + 3] = 255;
+      iB.data[o] = iB.data[o + 1] = iB.data[o + 2] = bump; iB.data[o + 3] = 255;
+      iM.data[o] = lamp; iM.data[o + 1] = glow; iM.data[o + 2] = 0; iM.data[o + 3] = 255;
+    }
+  }
+  gA.putImageData(iA, 0, 0); gR.putImageData(iR, 0, 0); gB.putImageData(iB, 0, 0); gM.putImageData(iM, 0, 0);
+  const mk = (c, srgb) => {
+    const t = new THREE.CanvasTexture(c); t.flipY = false;
+    if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+    t.anisotropy = 8; return t;
+  };
+  return (leadSkinCache[type] = { albedo: mk(cA, true), rm: mk(cR), bump: mk(cB), mask: mk(cM) });
+}
+// one material per cab end: the lamp colour (head/tail) is per end, the
+// passenger-window glow follows the night
+function leadMaterial(type) {
+  const sk = leadSkin(type);
+  const mat = new THREE.MeshStandardMaterial({
+    map: sk.albedo, roughnessMap: sk.rm, metalnessMap: sk.rm, roughness: 1, metalness: 1,
+    bumpMap: sk.bump, bumpScale: 0.6, emissiveMap: sk.mask, emissive: 0xffffff,
+  });
+  const uLamp = { value: new THREE.Color(0xfff6d8) };
+  mat.userData.lamp = uLamp;
+  mat.onBeforeCompile = shader => {
+    patchStation(shader);
+    shader.uniforms.uLamp = uLamp;
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform vec3 uLamp;')
+      .replace('#include <emissivemap_fragment>',
+        'vec4 emM = texture2D(emissiveMap, vEmissiveMapUv);\n\ttotalEmissiveRadiance = uLamp * emM.r * 1.6 + vec3(1., .88, .66) * emM.g * uNight * 0.5;');
+  };
+  return mat;
+}
+// where each lead car's lamps sit (for the halo sprite): local, tip = +L/2
+function leadLampPoint(type) {
+  const S = SHINK[type], Lp = S.lamps[0], s = (Lp.s0 + Lp.s1) / 2, Q = sectionAt(type, s);
+  const y = Lp.top ? Q.zt + Q.can : Q.zb + 0.42;
+  return { x: S.lamps.length > 1 ? 0 : 0, y, z: S.lead / 2 - s };
+}
+
 // commuter cab front skirt + coupler, merged (local z=0 is the car end)
 const cabGearGeo = BufferGeometryUtils.mergeGeometries([
   new THREE.BoxGeometry(2.2, 0.5, 0.34).translate(0, 0.78, -0.2),
@@ -2474,13 +2897,13 @@ const trainTypes = {
   tokaido: {
     name: '도카이도 신칸센 N700', nameJa: '東海道新幹線 N700系',
     sideClosed: shinkansenSide(null, '#1565c0'),
-    face: null, profile: 'n700', noseLen: NOSE.n700.len, noseTex: n700NoseTex, roofColor: 0xe8ecef,
+    face: null, profile: 'n700', roofColor: 0xe8ecef,
     cars: 6, maxSpeed: 32, dwell: 16, shink: true,
   },
   tohoku: {
     name: '도호쿠 신칸센 E5 하야부사', nameJa: '東北新幹線 E5系 はやぶさ', e5Atlas: true,
     sideClosed: e5Side(),
-    face: null, profile: 'e5', noseLen: NOSE.e5.len, noseTex: e5NoseTex, roofTex: e5Roof(),
+    face: null, profile: 'e5', roofTex: e5Roof(),
     cars: 6, maxSpeed: 32, dwell: 16, shink: true,
   },
 };
@@ -2595,11 +3018,7 @@ function lampSpec(typeKey) {
   const T = trainTypes[typeKey], { P } = profileOf(T.profile);
   if (typeKey === 'yamanote') return { x: 0.93, y: 3.84, dz: 0.06, r: 0.11 };      // E235: top corners
   if (typeKey === 'keihin' || T.band) return { x: 1.15, y: 1.82, dz: 0.06, r: 0.11 };  // E233 face: lower corners
-  if (!T.shink) return { x: 1.01, y: P.topY - P.w + 0.41, dz: 0.06, r: 0.12 };     // painted faces
-  const N = NOSE[T.profile];
-  if (T.profile === 'e5') { const t = 0.44, f = noseFrame('e5', t); return { x: 0.24, y: f.top - 0.02, dz: t * N.len, r: 0.09 }; }
-  const t = 0.8, f = noseFrame('n700', t);
-  return { x: P.hw * N.sxBot(t) * 0.62, y: f.bot + 0.34 * (f.top - f.bot), dz: t * N.len, r: 0.1 };
+  return { x: 1.01, y: P.topY - P.w + 0.41, dz: 0.06, r: 0.12 };                  // painted faces
 }
 const lampGeoCache = {};
 function lampPairGeo(typeKey) {
@@ -2608,7 +3027,29 @@ function lampPairGeo(typeKey) {
   for (const sx of [-1, 1]) gs.push(new THREE.SphereGeometry(L.r, 8, 8).translate(sx * L.x, L.y, 0));
   return (lampGeoCache[typeKey] = BufferGeometryUtils.mergeGeometries(gs));
 }
-const noseMatCache = {};
+// Shinkansen full-width outer diaphragm: the cabin section, a touch
+// inset, bridging the gap between cars (no box poking out)
+const diaphragmMat = new THREE.MeshStandardMaterial({ color: 0x3a3e43, roughness: 0.85 });
+const diaphragmCache = {};
+function diaphragmGeo(type) {
+  if (diaphragmCache[type]) return diaphragmCache[type];
+  const ring = sectionRing(SHINK[type].body).slice(0, -1).map(([x, y]) => new THREE.Vector2(x * 0.97, 0.3 + (y - 0.3) * 0.985));
+  const g = new THREE.ExtrudeGeometry(new THREE.Shape(ring), { depth: CAR_GAP + 0.12, bevelEnabled: false });
+  g.translate(0, 0, -(CAR_GAP + 0.12) / 2);
+  return (diaphragmCache[type] = g);
+}
+// Shinkansen lead-car bogies & underframe (the shell itself is leadGeo)
+const leadGearCache = {};
+function leadGear(type) {
+  if (leadGearCache[type]) return leadGearCache[type];
+  const S = SHINK[type], L = S.lead, parts = [];
+  for (const b of S.bogies) {
+    const z = L / 2 - b;
+    parts.push([bogieCoreGeo, 0, xform(0, RAIL_Y + 0.62, z)]);
+    for (const sx of [-1, 1]) parts.push([bogiePlaneGeo, 1, xform(sx * 1.05, RAIL_Y + 0.63, z, 0, sx > 0 ? Math.PI / 2 : -Math.PI / 2)]);
+  }
+  return (leadGearCache[type] = bakeSlots(parts));
+}
 
 // sides get a night-time window glow: the dark glazing band of the side
 // texture becomes an emissive mask (see makeWindowGlow)
@@ -2667,16 +3108,26 @@ function buildTrain(typeKey) {
   const slotMats = [sideMatA, sideMatB, roofCarMat, darkMat, endMat, roofMat, underMat, bogieMat, acMat];
   const bake = carBake(typeKey);
   const { P } = profileOf(T.profile), L = P.len;
-  const body = new THREE.InstancedMesh(bake.geo, bake.slots.map(s => slotMats[s]), T.cars);
+  // per-car lengths: Shinkansen lead cars are their own, longer cars
+  const carLens = [];
+  for (let i = 0; i < T.cars; i++)
+    carLens.push(isShink && (i === 0 || i === T.cars - 1) ? SHINK[T.profile].lead : L);
+  const bodyIdx = carLens.map(() => -1);
+  let nb = 0;
+  carLens.forEach((cl, i) => { if (!(isShink && (i === 0 || i === T.cars - 1))) bodyIdx[i] = nb++; });
+  const body = new THREE.InstancedMesh(bake.geo, bake.slots.map(s => slotMats[s]), Math.max(1, nb));
+  body.count = nb;
   body.castShadow = true;
   group.add(body);
   // gangway bellows / Shinkansen diaphragms — between cars only, never
-  // on a cab end, so they are their own (cars-1) instances
-  const gangway = new THREE.InstancedMesh(gangwayGeo, isShink ? endMat : darkMat, T.cars - 1);
+  // on a cab end, so they are their own (cars-1) instances, each at the
+  // rear end of ITS car (cars differ in length)
+  const gangway = new THREE.InstancedMesh(isShink ? diaphragmGeo(T.profile) : gangwayGeo, isShink ? diaphragmMat : darkMat, T.cars - 1);
   group.add(gangway);
-  const gwLocal = isShink
-    ? xform(0, 2.75, -L / 2 - 0.05, 0, 0, 0, 2.0, 1.2, 1)
-    : xform(0, 2.72, -L / 2 - 0.05);
+  const gwLocals = carLens.map(cl => isShink
+    ? xform(0, 0, -cl / 2 - CAR_GAP / 2)
+    : xform(0, 2.72, -cl / 2 - 0.05));
+  const gwLocal = gwLocals[1] || gwLocals[0];
 
   const pb = pantoBake(T.profile);
   const pantoMats = pb.slots.map(s => [darkMat, endMat][s]);
@@ -2691,26 +3142,30 @@ function buildTrain(typeKey) {
     cars.push(car);
   }
 
+  const leads = [];
   function addEnd(carIdx, sign) {
     const car = cars[carIdx];
     if (isShink) {
-      // sculpted duckbill nose lofted from the body silhouette
-      const noseMat = noseMatCache[typeKey] || (noseMatCache[typeKey] = new THREE.MeshStandardMaterial({
-        map: T.noseTex, roughness: 0.22, metalness: 0.28, side: THREE.DoubleSide }));
-      const N = NOSE[T.profile];
-      const nose = new THREE.Mesh(getNoseGeo(T.profile), noseMat);
-      nose.position.set(0, 0, sign * (L / 2 - 0.02));
-      if (sign < 0) nose.rotation.y = Math.PI;
-      nose.castShadow = true;
-      car.add(nose);
-      // cockpit canopy, seated on the nose surface where the loft puts it
-      const ct = N.canopyT, cf = noseFrame(T.profile, ct);
-      const ws = new THREE.Mesh(
-        new THREE.SphereGeometry(0.62, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2), noseGlassMat);
-      ws.scale.set(T.profile === 'e5' ? 1.0 : 0.9, T.profile === 'e5' ? 0.55 : 0.32, 2.2);
-      ws.position.set(0, cf.top - 0.12, sign * (L / 2 + N.len * ct));
-      if (sign < 0) ws.rotation.y = Math.PI;
-      car.add(ws);
+      // the whole lead car: nose, cab and passenger section in one shell
+      const lg = leadGeo(T.profile), lm = leadMaterial(T.profile);
+      const shell = new THREE.Mesh(lg.geo, lm);
+      if (sign < 0) shell.rotation.y = Math.PI;
+      shell.castShadow = true; shell.receiveShadow = true;
+      car.add(shell);
+      const gb = leadGear(T.profile);
+      const gear = new THREE.Mesh(gb.geo, gb.slots.map(k => [darkMat, bogieMat][k]));
+      if (sign < 0) gear.rotation.y = Math.PI;
+      car.add(gear);
+      leads.push(shell);
+      // lamps are lens areas of the shell: head/tail colour is a uniform
+      (sign > 0 ? lampsPlus : lampsMinus).push({ color: lm.userData.lamp.value });
+      const lp = leadLampPoint(T.profile);
+      const halo = new THREE.Sprite(haloMatHead);
+      halo.scale.setScalar(2.4);
+      halo.position.set(0, lp.y + 0.05, sign * (lp.z + 0.4));
+      car.add(halo);
+      (sign > 0 ? halosPlus : halosMinus).push(halo);
+      return;
     } else {
       let tex, fw, fh;
       if (T.atlas) {
@@ -2739,6 +3194,7 @@ function buildTrain(typeKey) {
     const lamps = new THREE.Mesh(lampPairGeo(typeKey), lm);
     const lz = ls.dz;
     lamps.position.z = sign * (L / 2 + lz);
+
     car.add(lamps);
     (sign > 0 ? lampsPlus : lampsMinus).push(lm);
     // soft additive halo around the lamps (the glow you see at dusk)
@@ -2751,9 +3207,14 @@ function buildTrain(typeKey) {
   addEnd(0, 1);
   addEnd(T.cars - 1, -1);
 
-  const len = T.cars * (L + CAR_GAP) - CAR_GAP;
-  return { group, cars, body, gangway, gwLocal, sideMatA, sideMatB, lampsPlus, lampsMinus,
-    halosPlus, halosMinus, len, carLen: L, type: T, typeKey, atlas: !!T.atlas };
+  // distance from the head (tip) to each car's centre
+  const carOff = [];
+  let acc = 0;
+  carLens.forEach(cl => { carOff.push(acc + cl / 2); acc += cl + CAR_GAP; });
+  const len = acc - CAR_GAP;
+  return { group, cars, body, bodyIdx, leads, gangway, gwLocal, gwLocals, carLens, carOff,
+    sideMatA, sideMatB, lampsPlus, lampsMinus,
+    halosPlus, halosMinus, len, carLen: L, tipZ: carLens[0] / 2, type: T, typeKey, atlas: !!T.atlas };
 }
 
 // headlights face the direction of travel (terminals reverse out)
@@ -2844,10 +3305,18 @@ const doorGapGeo = new THREE.PlaneGeometry(1, 1);
 function attachDoors(t) {
   const spec = DOOR_U[t.typeKey];
   const us = t.platSideLocal > 0 ? spec.A : spec.B;
-  const L = t.carLen, s = t.platSideLocal;
+  const s = t.platSideLocal, n = t.cars.length;
   t.doorLocal = [];     // per door: [carIndex, localZ]
-  for (let i = 0; i < t.cars.length; i++)
+  for (let i = 0; i < n; i++) {
+    const L = t.carLens[i];
+    if (t.type.shink && (i === 0 || i === n - 1)) {
+      // lead car: one passenger door, 1.7m from the coupled end (as painted)
+      const dz = L / 2 - 1.7;
+      t.doorLocal.push([i, i === 0 ? -dz : dz]);
+      continue;
+    }
     for (const u of us) t.doorLocal.push([i, s > 0 ? L / 2 - u * L : -L / 2 + u * L]);
+  }
   const im = new THREE.InstancedMesh(doorGapGeo, doorGapMat, t.doorLocal.length);
   im.visible = false; im.frustumCulled = false;
   t.group.add(im);
@@ -2983,7 +3452,7 @@ function placeCars(t) {
   // a little life: cars lean into the curves and shimmy at speed
   const sway = Math.min(1, t.speed / 25);
   for (let i = 0; i < n; i++) {
-    const s = t.sHead - t.carLen / 2 - i * (t.carLen + CAR_GAP);
+    const s = t.sHead - t.carOff[i];
     t.route.posAt(s, _p);
     const car = t.cars[i];
     const yaw0 = car.rotation.y;
@@ -2994,8 +3463,8 @@ function placeCars(t) {
     const lean = Math.max(-0.02, Math.min(0.02, dy * 6));
     car.rotation.z = car.rotation.z * 0.85 + (lean + Math.sin(s * 0.9 + i) * 0.004 * sway) * 0.15;
     car.updateMatrix();
-    t.body.setMatrixAt(i, car.matrix);
-    if (i < n - 1) t.gangway.setMatrixAt(i, _gw.multiplyMatrices(car.matrix, t.gwLocal));
+    if (t.bodyIdx[i] >= 0) t.body.setMatrixAt(t.bodyIdx[i], car.matrix);
+    if (i < n - 1) t.gangway.setMatrixAt(i, _gw.multiplyMatrices(car.matrix, t.gwLocals[i]));
   }
   t.body.instanceMatrix.needsUpdate = true;
   t.gangway.instanceMatrix.needsUpdate = true;
@@ -3856,8 +4325,11 @@ function shotPose(t, shot, P, T, A) {
   const k = portraitK();
   if (shot === 'cab') {
     const shink = !!t.type.shink;
-    frameAt(t, ls + sg * (shink ? 1.2 : 0.45), _fb);
-    P.set(_fb.x, DECK + (shink ? 4.7 : 3.25), _fb.z);
+    // driver's eye: in the cockpit behind the windscreen (Shinkansen) or
+    // just inside the flat cab front (commuters)
+    const eye = shink ? SHINK[t.type.profile].cabEye : [-0.45, 3.25];
+    frameAt(t, ls - sg * eye[0], _fb);
+    P.set(_fb.x, DECK + eye[1], _fb.z);
     frameAt(t, ls + sg * 70, _fb);
     T.set(_fb.x, DECK + 2.2, _fb.z);
     return;
@@ -4066,13 +4538,13 @@ function pickTrain(cx, cy) {
   _ndc.set((cx / W) * 2 - 1, -(cy / H) * 2 + 1);
   raycaster.setFromCamera(_ndc, camera);
   const vis = trains.filter(t => t.group.visible);
-  const hits = raycaster.intersectObjects(vis.map(t => t.body), false);
-  if (hits.length) return vis.find(t => t.body === hits[0].object);
+  const hits = raycaster.intersectObjects(vis.flatMap(t => [t.body, ...t.leads]), false);
+  if (hits.length) return vis.find(t => t.body === hits[0].object || t.leads.includes(hits[0].object));
   let best = null, bd = 1e9, bz = 1e9;
   const R = 46;
   for (const t of vis) {
-    for (const car of t.cars) {
-      for (const dz of [-t.carLen * 0.42, 0, t.carLen * 0.42]) {
+    for (const [ci, car] of t.cars.entries()) {
+      for (const dz of [-t.carLens[ci] * 0.42, 0, t.carLens[ci] * 0.42]) {
         _sp.set(0, 2.3, dz).applyMatrix4(car.matrix);
         _sq.copy(_sp).applyMatrix4(camera.matrixWorldInverse);
         if (_sq.z > -0.5) continue;                       // behind the camera
@@ -4330,9 +4802,11 @@ function setSound(on) {
    Each card shows the real model (photo textures and all) from a
    three-quarter front view, rendered once through the main renderer. */
 function layoutStraight(tr) {
-  const L = tr.carLen || CAR_LEN;
-  tr.cars.forEach((car, i) => { car.position.set(0, 0, -i * (L + CAR_GAP)); car.updateMatrix(); tr.body.setMatrixAt(i, car.matrix); });
-  tr.cars.slice(0, -1).forEach((car, i) => tr.gangway.setMatrixAt(i, _gw.multiplyMatrices(car.matrix, tr.gwLocal)));
+  tr.cars.forEach((car, i) => {
+    car.position.set(0, 0, -(tr.carOff[i] - tr.carOff[0])); car.updateMatrix();
+    if (tr.bodyIdx[i] >= 0) tr.body.setMatrixAt(tr.bodyIdx[i], car.matrix);
+  });
+  tr.cars.slice(0, -1).forEach((car, i) => tr.gangway.setMatrixAt(i, _gw.multiplyMatrices(car.matrix, tr.gwLocals[i])));
   tr.body.instanceMatrix.needsUpdate = true; tr.gangway.instanceMatrix.needsUpdate = true;
   tr.body.computeBoundingSphere(); tr.gangway.computeBoundingSphere();
 }
@@ -4359,8 +4833,8 @@ function renderThumbs() {
     layoutStraight(tr);
     tr.group.traverse(o => { if (o.isSprite) o.visible = false; });
     ts.add(tr.group);
-    const nose = tr.type.shink ? tr.type.noseLen : 0;
-    const fz = tr.carLen / 2 + nose;
+    const nose = tr.type.shink ? SHINK[tr.type.profile].noseLen * 0.55 : 0;
+    const fz = tr.tipZ;
     tc.position.set(-7.5 - nose * 0.25, 3.4, fz + 9 + nose * 0.55);
     tc.lookAt(0, 2.2, fz - 7 - nose * 0.2);
     renderer.setRenderTarget(null);
@@ -4498,8 +4972,8 @@ function rebuildAllTrains() {
   for (const t of trains) {
     scene.remove(t.group);
     const fresh = buildTrain(t.typeKey);
-    for (const k of ['group', 'cars', 'body', 'gangway', 'gwLocal', 'sideMatA', 'sideMatB',
-      'lampsPlus', 'lampsMinus', 'halosPlus', 'halosMinus', 'atlas']) t[k] = fresh[k];
+    for (const k of ['group', 'cars', 'body', 'bodyIdx', 'leads', 'gangway', 'gwLocal', 'gwLocals', 'carLens', 'carOff',
+      'sideMatA', 'sideMatB', 'lampsPlus', 'lampsMinus', 'halosPlus', 'halosMinus', 'atlas']) t[k] = fresh[k];
     t.group.visible = t.state !== 'wait';
     attachDoors(t); t.doorDirty = true;
     scene.add(t.group);
