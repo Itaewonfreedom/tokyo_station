@@ -3049,6 +3049,25 @@ const cabGearGeo = BufferGeometryUtils.mergeGeometries([
   new THREE.BoxGeometry(2.2, 0.5, 0.34).translate(0, 0.78, -0.2),
   new THREE.BoxGeometry(0.28, 0.3, 0.7).translate(0, 0.9, 0.3),
 ]);
+// contact shade: a soft, darker-in-the-middle patch on the bed under a car
+// (≈ ambient occlusion of the body & bogies over the ballast), scaled per car
+const contactGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2).translate(0, 0.372, 0);
+const contactMat = new THREE.MeshBasicMaterial({
+  color: 0x000000, transparent: true, opacity: 0.42, depthWrite: false,
+  alphaMap: (() => {
+    const c = document.createElement('canvas'); c.width = 64; c.height = 256;
+    const g = c.getContext('2d'), im = g.createImageData(64, 256);
+    for (let y = 0; y < 256; y++) for (let x = 0; x < 64; x++) {
+      const u = (x + 0.5) / 64 * 2 - 1, v = (y + 0.5) / 256 * 2 - 1;
+      const across = Math.exp(-((u / 0.62) ** 4)), along = Math.min(1, (1 - Math.abs(v)) / 0.07);
+      const rails = 0.25 * Math.exp(-(((Math.abs(u) - 0.42) / 0.08) ** 2));   // a touch darker under the wheels
+      const a = Math.min(1, across * along * (0.75 + rails));
+      const o = (y * 64 + x) * 4; im.data[o] = im.data[o + 1] = im.data[o + 2] = a * 255; im.data[o + 3] = 255;
+    }
+    g.putImageData(im, 0, 0);
+    return new THREE.CanvasTexture(c);
+  })(),
+});
 // additive lamp halos — nearly invisible by day, a soft bloom at night
 const haloTex = (() => {
   const c = document.createElement('canvas'); c.width = c.height = 64;
@@ -3177,12 +3196,21 @@ function carBake(typeKey) {
     // part of the roof shape)
     parts.push([new THREE.BoxGeometry(2.2, 0.34, 3.4), S_AC, xform(0, P.roofY + 0.15, -3.4)]);
   }
-  for (const bz of [-P.bogie, P.bogie]) {
-    parts.push([bogieCoreGeo, S_DARK, xform(0, RAIL_Y + 0.62, bz)]);
-    for (const sx of [-1, 1])
-      parts.push([bogiePlaneGeo, S_BOGIE, xform(sx * (shink ? 1.05 : 1.18), RAIL_Y + 0.63, bz, 0, sx > 0 ? Math.PI / 2 : -Math.PI / 2)]);
-  }
   return (carBakeCache[key] = bakeSlots(parts));
+}
+// bogies ride the rails; they are a separate instanced mesh so only the
+// car BODY carries the ride motion (slots: 0 dark frame, 1 photo side)
+const gearBakeCache = {};
+function gearBake(typeKey) {
+  const T = trainTypes[typeKey], key = T.profile;
+  if (gearBakeCache[key]) return gearBakeCache[key];
+  const { P } = profileOf(key), shink = P.kind === 's', parts = [];
+  for (const bz of [-P.bogie, P.bogie]) {
+    parts.push([bogieCoreGeo, 0, xform(0, RAIL_Y + 0.62, bz)]);
+    for (const sx of [-1, 1])
+      parts.push([bogiePlaneGeo, 1, xform(sx * (shink ? 1.05 : 1.18), RAIL_Y + 0.63, bz, 0, sx > 0 ? Math.PI / 2 : -Math.PI / 2)]);
+  }
+  return (gearBakeCache[key] = bakeSlots(parts));
 }
 // single-arm pantograph raised to the contact wire (y = 6.0), standing on
 // insulators on the type's own roof (+ Shinkansen noise shields)
@@ -3317,6 +3345,14 @@ function buildTrain(typeKey) {
   body.count = nb;
   body.castShadow = true;
   group.add(body);
+  const gb0 = gearBake(typeKey);
+  const gear = new THREE.InstancedMesh(gb0.geo, gb0.slots.map(k => [darkMat, bogieMat][k]), Math.max(1, nb));
+  gear.count = nb; gear.castShadow = true;
+  group.add(gear);
+  // soft contact shade on the track bed under every car
+  const contact = new THREE.InstancedMesh(contactGeo, contactMat, T.cars);
+  contact.frustumCulled = false; contact.renderOrder = 1;
+  group.add(contact);
   // gangway bellows / Shinkansen diaphragms — between cars only, never
   // on a cab end, so they are their own (cars-1) instances, each at the
   // rear end of ITS car (cars differ in length)
@@ -3330,7 +3366,9 @@ function buildTrain(typeKey) {
   const pb = pantoBake(T.profile);
   const pantoMats = pb.slots.map(s => [darkMat, endMat][s]);
   for (let i = 0; i < T.cars; i++) {
-    const car = new THREE.Object3D();          // transform carrier (+ cab/panto children)
+    const car = new THREE.Object3D();          // rail frame: follows the track exactly
+    const bn = new THREE.Object3D();           // the car body: rides on its suspension
+    car.add(bn); car.userData.bn = bn;
     if (isShink ? i === 3 : (i === 2 || i === 5)) {
       const p = new THREE.Mesh(pb.geo, pantoMats);
       p.position.z = isShink ? 0 : 3.2;
@@ -3349,7 +3387,7 @@ function buildTrain(typeKey) {
       const shell = new THREE.Mesh(lg.geo, lm);
       if (sign < 0) shell.rotation.y = Math.PI;
       shell.castShadow = true; shell.receiveShadow = true;
-      car.add(shell);
+      car.userData.bn.add(shell);
       const gb = leadGear(T.profile);
       const gear = new THREE.Mesh(gb.geo, gb.slots.map(k => [darkMat, bogieMat][k]));
       if (sign < 0) gear.rotation.y = Math.PI;
@@ -3361,7 +3399,7 @@ function buildTrain(typeKey) {
       const halo = new THREE.Sprite(haloMatHead);
       halo.scale.setScalar(2.4);
       halo.position.set(0, lp.y + 0.05, sign * (lp.z + 0.4));
-      car.add(halo);
+      car.userData.bn.add(halo);
       (sign > 0 ? halosPlus : halosMinus).push(halo);
       return;
     } else {
@@ -3379,12 +3417,12 @@ function buildTrain(typeKey) {
       const f = new THREE.Mesh(cabFaceGeoFor(T.profile, fw, fh), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.45, metalness: 0.1 }));
       f.position.set(0, 0, sign * (L / 2 + 0.03));
       if (sign < 0) f.rotation.y = Math.PI;
-      car.add(f);
+      car.userData.bn.add(f);
       // front skirt + coupler (one merged mesh)
       const fsc = new THREE.Mesh(cabGearGeo, darkMat);
       fsc.position.z = sign * (L / 2);
       if (sign < 0) fsc.rotation.y = Math.PI;
-      car.add(fsc);
+      car.userData.bn.add(fsc);
     }
     // both marker lamps of a cab share one material → one draw call
     const lm = new THREE.MeshBasicMaterial({ color: 0xfff6d8 });
@@ -3392,25 +3430,33 @@ function buildTrain(typeKey) {
     const lamps = new THREE.Mesh(lampPairGeo(typeKey), lm);
     const lz = ls.dz;
     lamps.position.z = sign * (L / 2 + lz);
-
-    car.add(lamps);
+    car.userData.bn.add(lamps);
     (sign > 0 ? lampsPlus : lampsMinus).push(lm);
     // soft additive halo around the lamps (the glow you see at dusk)
     const halo = new THREE.Sprite(haloMatHead);
     halo.scale.setScalar(isShink ? 2.6 : 3.2);
     halo.position.set(0, ls.y, sign * (L / 2 + lz + 0.35));
-    car.add(halo);
+    car.userData.bn.add(halo);
     (sign > 0 ? halosPlus : halosMinus).push(halo);
   }
   addEnd(0, 1);
   addEnd(T.cars - 1, -1);
 
+  // bogie centres along each car (local z; car frame +z = route +s)
+  const bogieZ = carLens.map((cl, i) => {
+    if (isShink && (i === 0 || i === T.cars - 1)) {
+      const b = SHINK[T.profile].bogies.map(x => cl / 2 - x);
+      return i === 0 ? b : b.map(z => -z);
+    }
+    return [P.bogie, -P.bogie];
+  });
+  const bodyW = isShink ? 3.36 : 2.95;
   // distance from the head (tip) to each car's centre
   const carOff = [];
   let acc = 0;
   carLens.forEach(cl => { carOff.push(acc + cl / 2); acc += cl + CAR_GAP; });
   const len = acc - CAR_GAP;
-  return { group, cars, body, bodyIdx, leads, gangway, gwLocal, gwLocals, carLens, carOff,
+  return { group, cars, body, bodyIdx, gear, contact, bogieZ, bodyW, leads, gangway, gwLocal, gwLocals, carLens, carOff,
     sideMatA, sideMatB, lampsPlus, lampsMinus,
     halosPlus, halosMinus, len, carLen: L, tipZ: carLens[0] / 2, type: T, typeKey, atlas: !!T.atlas };
 }
@@ -3648,29 +3694,90 @@ addTrain('chuo',     'CH1', 1, 5,  true);
 addTrain('tokaido',  'TKS1',-1, 11, true);
 addTrain('tohoku',   'THS1', 1, 17, true);
 
+/* ---------- ride: each car body answers the track under ITS bogies ----------
+   The track carries a fixed, position-based irregularity (a few
+   superposed long waves per line) plus a small impulse at every rail
+   joint (every 25m — the same joints the 가땅고똥 sound is keyed to).
+   Each bogie reads the track where IT is, so the cars ahead and behind
+   hit the same spot one after the other, time-shifted by speed and car
+   spacing. A joint's impulse is a damped ~1.3Hz body bounce measured in
+   time since that bogie crossed it (distance / speed), so it's the same
+   at any frame rate and in either direction. The body gets heave, pitch
+   (front vs rear bogie) and roll; bogies/wheels stay on the rails.
+   Amplitude saturates with speed (Shinkansen ≈ half), eases out after a
+   stop, and acceleration/braking add a small filtered pitch. All of this
+   is visual only: sHead / blocks / stop positions are untouched. */
+const RIDE = {
+  c: { heave: 0.0022, joint: 0.006, roll: 0.0006, jRoll: 0.0005, fh: 1.35, tau: 0.55, vSat: 11, accPitch: 0.0007, cant: 0.0025 },
+  s: { heave: 0.0011, joint: 0.0022, roll: 0.0003, jRoll: 0.0002, fh: 1.1, tau: 0.75, vSat: 18, accPitch: 0.0004, cant: 0.0015 },
+};
+const lineSeed = line => { let h = 7; for (const ch of line) h = (h * 31 + ch.charCodeAt(0)) % 9973; return h * 0.137; };
+const trackV = (k, s) => (Math.sin(s * 0.861 + k) * 0.5 + Math.sin(s * 0.4793 + k * 1.7) * 0.8 + Math.sin(s * 0.1987 + k * 0.3)) / 2.3;
+const trackL = (k, s) => (Math.sin(s * 0.617 + k * 2.3) * 0.7 + Math.sin(s * 0.2311 + k * 0.9)) / 1.7;
+const jointSign = j => ((Math.sin(j * 12.9898) * 43758.5453) % 1 + 1) % 1 > 0.5 ? 1 : -1;
+// body response at a bogie: joint impulses of the last two joints crossed
+function jointBounce(A, sb, dir, v) {
+  const jf = dir > 0 ? Math.floor(sb / 25) : Math.ceil(sb / 25);
+  let h = 0, r = 0;
+  for (let n = 0; n < 2; n++) {
+    const j = jf - dir * n, d = (sb - j * 25) * dir;
+    if (d < 0) continue;
+    const tt = d / Math.max(v, 3);
+    if (tt > 3.5 * A.tau) continue;
+    const g = Math.exp(-tt / A.tau) * Math.sin(Math.PI * 2 * A.fh * tt);
+    h += g; r += g * jointSign(j);
+  }
+  return [h, r];
+}
+const _gw2 = new THREE.Matrix4(), _cs = new THREE.Matrix4(), _pa = { x: 0, z: 0, yaw: 0 }, _pb2 = { x: 0, z: 0, yaw: 0 };
 function placeCars(t) {
-  const n = t.cars.length;
-  // a little life: cars lean into the curves and shimmy at speed
-  const sway = Math.min(1, t.speed / 25);
+  const n = t.cars.length, dt = t._dt || 0;
+  const A = t.type.shink ? RIDE.s : RIDE.c;
+  const dir = t.state === 'departRev' ? -1 : 1, v = t.speed;
+  // ride level & filtered acceleration (time-based filters: frame-rate independent)
+  if (t.rideK === undefined) { t.rideK = 0; t.accF = 0; t.vPrev = v; t.seed = lineSeed(t.line); }
+  if (dt > 0) {
+    const a = Math.max(-3, Math.min(3, (v - t.vPrev) / dt));
+    t.accF += (a - t.accF) * (1 - Math.exp(-dt / 0.35));
+    t.rideK += (Math.min(1, v / A.vSat) - t.rideK) * (1 - Math.exp(-dt / 0.6));
+    t.vPrev = v;
+  }
+  const K = t.rideK, k = t.seed;
   for (let i = 0; i < n; i++) {
     const s = t.sHead - t.carOff[i];
     t.route.posAt(s, _p);
     const car = t.cars[i];
-    const yaw0 = car.rotation.y;
     car.position.set(_p.x, DECK, _p.z);
-    car.rotation.y = _p.yaw;
-    let dy = _p.yaw - yaw0;
-    if (dy > Math.PI) dy -= Math.PI * 2; else if (dy < -Math.PI) dy += Math.PI * 2;
-    const lean = Math.max(-0.02, Math.min(0.02, dy * 6));
-    car.rotation.z = car.rotation.z * 0.85 + (lean + Math.sin(s * 0.9 + i) * 0.004 * sway) * 0.15;
+    car.rotation.set(0, _p.yaw, 0);
     car.updateMatrix();
-    if (t.bodyIdx[i] >= 0) t.body.setMatrixAt(t.bodyIdx[i], car.matrix);
+    // bogies read the track
+    const [zA, zB] = t.bogieZ[i];
+    let yA = A.heave * trackV(k, s + zA), yB = A.heave * trackV(k, s + zB);
+    let rl = A.roll * (trackL(k, s + zA) + trackL(k, s + zB)) / 2;
+    const [hA, rA] = jointBounce(A, s + zA, dir, v), [hB, rB] = jointBounce(A, s + zB, dir, v);
+    yA += A.joint * hA; yB += A.joint * hB; rl += A.jRoll * (rA + rB) / 2;
+    // curve: a little cant into the bend, from the route curvature
+    t.route.posAt(s + 6, _pa); t.route.posAt(s - 6, _pb2);
+    let dy = _pa.yaw - _pb2.yaw; if (dy > Math.PI) dy -= Math.PI * 2; else if (dy < -Math.PI) dy += Math.PI * 2;
+    const cant = Math.max(-0.012, Math.min(0.012, (dy / 12) * v * v * A.cant));
+    const bn = car.userData.bn;
+    bn.position.y = K * (yA + yB) / 2;
+    bn.rotation.set(-K * (yA - yB) / (zA - zB) - dir * t.accF * A.accPitch, 0, K * rl + cant);
+    bn.updateMatrix();
+    if (t.bodyIdx[i] >= 0) {
+      t.body.setMatrixAt(t.bodyIdx[i], _gw2.multiplyMatrices(car.matrix, bn.matrix));
+      t.gear.setMatrixAt(t.bodyIdx[i], car.matrix);
+    }
     if (i < n - 1) t.gangway.setMatrixAt(i, _gw.multiplyMatrices(car.matrix, t.gwLocals[i]));
+    t.contact.setMatrixAt(i, _cs.makeScale(t.bodyW + 0.6, 1, t.carLens[i] + 0.4).premultiply(car.matrix));
   }
   t.body.instanceMatrix.needsUpdate = true;
+  t.gear.instanceMatrix.needsUpdate = true;
   t.gangway.instanceMatrix.needsUpdate = true;
+  t.contact.instanceMatrix.needsUpdate = true;
   // instances move every frame — keep culling/raycast bounds honest
   t.body.computeBoundingSphere();
+  t.gear.computeBoundingSphere();
   t.gangway.computeBoundingSphere();
 }
 
@@ -3710,6 +3817,7 @@ function startDeparture(t, byUser) {
 }
 
 function updateTrain(t, dt) {
+  t._dt = dt;
   switch (t.state) {
     case 'wait':
       t.timer -= dt;
@@ -3797,6 +3905,9 @@ function updateTrain(t, dt) {
       else placeCars(t);
       break;
   }
+  // standing at a platform: keep easing the body motion out after the stop
+  if (t.group.visible && (t.state === 'dwell' || t.state === 'melody' || t.state === 'closing')
+      && (t.rideK > 1e-4 || Math.abs(t.accF) > 1e-4)) placeCars(t);
   updateDoorMesh(t, dt);
   // rail joints every 25m → 가땅고똥
   if (t.group.visible && t.speed > 4) {
@@ -5003,10 +5114,12 @@ function setSound(on) {
    Each card shows the real model (photo textures and all) from a
    three-quarter front view, rendered once through the main renderer. */
 function layoutStraight(tr) {
+  tr.contact.count = 0;
   tr.cars.forEach((car, i) => {
     car.position.set(0, 0, -(tr.carOff[i] - tr.carOff[0])); car.updateMatrix();
-    if (tr.bodyIdx[i] >= 0) tr.body.setMatrixAt(tr.bodyIdx[i], car.matrix);
+    if (tr.bodyIdx[i] >= 0) { tr.body.setMatrixAt(tr.bodyIdx[i], car.matrix); tr.gear.setMatrixAt(tr.bodyIdx[i], car.matrix); }
   });
+  tr.gear.instanceMatrix.needsUpdate = true; tr.gear.computeBoundingSphere();
   tr.cars.slice(0, -1).forEach((car, i) => tr.gangway.setMatrixAt(i, _gw.multiplyMatrices(car.matrix, tr.gwLocals[i])));
   tr.body.instanceMatrix.needsUpdate = true; tr.gangway.instanceMatrix.needsUpdate = true;
   tr.body.computeBoundingSphere(); tr.gangway.computeBoundingSphere();
@@ -5173,7 +5286,7 @@ function rebuildAllTrains() {
   for (const t of trains) {
     scene.remove(t.group);
     const fresh = buildTrain(t.typeKey);
-    for (const k of ['group', 'cars', 'body', 'bodyIdx', 'leads', 'gangway', 'gwLocal', 'gwLocals', 'carLens', 'carOff',
+    for (const k of ['group', 'cars', 'body', 'bodyIdx', 'gear', 'contact', 'bogieZ', 'bodyW', 'leads', 'gangway', 'gwLocal', 'gwLocals', 'carLens', 'carOff',
       'sideMatA', 'sideMatB', 'lampsPlus', 'lampsMinus', 'halosPlus', 'halosMinus', 'atlas']) t[k] = fresh[k];
     t.group.visible = t.state !== 'wait';
     attachDoors(t); t.doorDirty = true;
