@@ -250,9 +250,12 @@ document.getElementById('app').appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 // day ↔ night: nightBlend eases 0 → 1 and drives every night-time glow
 let isNight = false, nightBlend = 0;
-const TRAIN_GLOW = 1.1;
-const HEMI_DAY = 0.6, HEMI_NIGHT = 0.3;
-const SUN_DAY = new THREE.Color(0xfff2dd), SUN_MOON = new THREE.Color(0x8ea8e8);
+const TRAIN_GLOW = 0.5;        // lit car windows: warm, never blown out
+const HEMI_DAY = 0.6, HEMI_NIGHT = 0.62;
+const SUN_DAY = new THREE.Color(0xfff2dd), SUN_MOON = new THREE.Color(0x9ab4f0);
+// the hemisphere fill goes cool-sky over warm-city-ground at night
+const HEMI_SKY_D = new THREE.Color(0xbfd6ff), HEMI_SKY_N = new THREE.Color(0x7d93cc);
+const HEMI_GND_D = new THREE.Color(0x6b6257), HEMI_GND_N = new THREE.Color(0x5a4638);
 let composer = null, bloomPass = null;   // night bloom (created on demand)
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.5, 1600);
 camera.position.set(-80, 45, 150);
@@ -284,6 +287,8 @@ const PLATFORM_LEN = 210;
 const LADDER_CLEAR = 105;
 const GAUGE = 0.72;
 const DECK = 8.5;   // the whole yard rides a ~3-storey elevated viaduct
+const RAIL_Y = 0.53;  // rail head above the deck (car coordinates start at the deck)
+const PLAT_Y = 1.62;  // platform top ≈ car floor (≈1.1m above the rail head)
 
 /* Real Tokyo Station layout, west → east. In the station zone the
    tracks SPREAD APART around each island platform (±3.4m from the
@@ -520,10 +525,13 @@ function facadeTex(style, lit) {
   });
 }
 const facadeDay = [facadeTex(0, false), facadeTex(1, false), facadeTex(2, false)];
-const facadeNight = [facadeTex(0, true), facadeTex(1, true), facadeTex(2, true)];
+// (the old three repeating "lit" canvases are gone: night windows are
+// generated per building in the shader — see cityWindowMaterial)
 
 function commuterSide(colorHex, doorsOpen, color2 = null) {
-  return canvasTex(1024, 176, (g, w, h) => {
+  // painted on a 176-high grid, stored at true side-wall proportions
+  return canvasTex(1024, 124, (g, w) => {
+    const h = 176; g.scale(1, 124 / 176);
     const grad = g.createLinearGradient(0, 0, 0, h);
     grad.addColorStop(0, '#e3e6e8'); grad.addColorStop(.5, '#c2c7cb'); grad.addColorStop(1, '#aeb3b8');
     g.fillStyle = grad; g.fillRect(0, 0, w, h);
@@ -730,7 +738,7 @@ const ATLAS_REGIONS = {
             doors: [[270, 343], [584, 657], [859, 932]], doorY: [30, 183] },
   side2:  { x: 7,    y: 323, w: 1065, h: 191,
             doors: [[132, 206], [406, 479], [695, 767]], doorY: [30, 183] },
-  face:   { x: 1092, y: 158, w: 274,  h: 304 },
+  face:   { x: 1091, y: 171, w: 266,  h: 291 },   // the green frame only (no black margin)
   under:  { x: 7,    y: 868, w: 1033, h: 66 },
   bogie:  { x: 1360, y: 545, w: 260,  h: 125 },
   roof:   { x: 8,    y: 650, w: 820,  h: 195 },   // ribbed roof panel + vent grilles
@@ -774,6 +782,49 @@ function atlasRegionTex(atlas, r, flipX = false, AW = ATLAS_W, AH = ATLAS_H) {
     t.repeat.set(r.w / AW, r.h / AH);
     t.offset.set(r.x / AW, (AH - r.y - r.h) / AH);
   }
+  return t;
+}
+
+/* E233 family liveries from the one real E233 photo sheet: the Keihin
+   sky-blue band is found by hue and re-painted, keeping the photo's own
+   shading (luminance ratio), so Chuo (orange) and Ueno-Tokyo (orange over
+   green) get real stainless bodies instead of painted placeholders.
+   `split` paints the upper half of the main band colA and the lower colB. */
+function recolorBand(img, r, colA, colB = null) {
+  const c = document.createElement('canvas'); c.width = r.w; c.height = r.h;
+  const g = c.getContext('2d');
+  g.drawImage(img, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+  const id = g.getImageData(0, 0, r.w, r.h), d = id.data;
+  const isBand = i => d[i + 2] > 140 && d[i + 2] > d[i] + 60 && d[i + 2] > d[i + 1] + 15;
+  // main band = the tallest run of rows that are mostly blue
+  let best = [0, -1], run = null;
+  for (let y = 0; y < r.h; y++) {
+    let n = 0;
+    for (let x = 0; x < r.w; x += 4) if (isBand((y * r.w + x) * 4)) n++;
+    const on = n > r.w / 4 * 0.25;
+    if (on && !run) run = [y, y]; else if (on) run[1] = y;
+    if ((!on || y === r.h - 1) && run) { if (run[1] - run[0] > best[1] - best[0]) best = run; run = null; }
+  }
+  const mid = (best[0] + best[1]) / 2;
+  const A = new THREE.Color(colA), B = new THREE.Color(colB || colA);
+  const lum = i => 0.3 * d[i] + 0.59 * d[i + 1] + 0.11 * d[i + 2];
+  let sum = 0, cnt = 0;
+  for (let i = 0; i < d.length; i += 16) if (isBand(i)) { sum += lum(i); cnt++; }
+  const ref = cnt ? sum / cnt : 150;
+  for (let y = 0; y < r.h; y++)
+    for (let x = 0; x < r.w; x++) {
+      const i = (y * r.w + x) * 4;
+      if (!isBand(i)) continue;
+      // the target colour at the band's average brightness; the photo's
+      // own shading only modulates it (sRGB values, no colour shift)
+      const k = Math.min(1.25, Math.max(0.55, lum(i) / ref));
+      const C = colB && y > mid && y <= best[1] + 2 && y >= best[0] - 2 ? B : A;
+      const cs = C.clone().convertLinearToSRGB();
+      d[i] = Math.min(255, cs.r * 255 * k); d[i + 1] = Math.min(255, cs.g * 255 * k); d[i + 2] = Math.min(255, cs.b * 255 * k);
+    }
+  g.putImageData(id, 0, 0);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
   return t;
 }
 
@@ -870,34 +921,119 @@ skyGroup.add(new THREE.Mesh(
 skyGroup.children[0].renderOrder = -1;
 
 /* image-based lighting: a small sky scene (gradient + sun hot-spot + a
-   dim city-coloured ground) is pre-filtered once for day and once for
-   night. Metal rails, glass towers and the car bodies finally reflect a
-   sky instead of reading as flat plastic. */
+   city-coloured ground) rendered into a cube and pre-filtered. It is
+   re-filtered as day blends into night (into ONE reused target), so
+   reflections fade smoothly instead of snapping at the half-way point.
+   Night keeps a warm, lit-city horizon band so stainless bodies still
+   have something to reflect. */
 const envMaps = (() => {
   const pmrem = new THREE.PMREMGenerator(renderer);
-  const mk = (top, bottom, ground, sunK) => {
-    const es = new THREE.Scene();
-    const u = {
-      topColor: { value: new THREE.Color(top) }, bottomColor: { value: new THREE.Color(bottom) },
-      ground: { value: new THREE.Color(ground) }, sunDir: { value: SUN_DIR.clone() }, sunK: { value: sunK },
-    };
-    es.add(new THREE.Mesh(new THREE.SphereGeometry(100, 32, 16), new THREE.ShaderMaterial({
-      uniforms: u, side: THREE.BackSide,
-      vertexShader: SKY_VERT,
-      fragmentShader: `uniform vec3 topColor,bottomColor,ground,sunDir; uniform float sunK; varying vec3 vP;
-        void main(){ vec3 d = normalize(vP);
-          vec3 c = d.y > 0. ? mix(bottomColor, topColor, pow(d.y, .6)) : mix(bottomColor * .6, ground, min(1., -d.y * 6.));
-          c += vec3(1.,.95,.85) * sunK * pow(max(dot(d, sunDir), 0.), 180.);
-          gl_FragColor = vec4(c, 1.); }`,
-    })));
-    return pmrem.fromScene(es, 0.02).texture;
+  const es = new THREE.Scene();
+  const u = {
+    topColor: { value: new THREE.Color() }, bottomColor: { value: new THREE.Color() },
+    ground: { value: new THREE.Color() }, sunDir: { value: SUN_DIR.clone() }, sunK: { value: 0 },
   };
-  const day = mk(0x6f9ad0, 0xdde8f2, 0x6a6258, 40);
-  const night = mk(0x0a1430, 0x28365c, 0x16161c, 0);
-  pmrem.dispose();
-  return { day, night };
+  es.add(new THREE.Mesh(new THREE.SphereGeometry(100, 32, 16), new THREE.ShaderMaterial({
+    uniforms: u, side: THREE.BackSide,
+    vertexShader: SKY_VERT,
+    fragmentShader: `uniform vec3 topColor,bottomColor,ground,sunDir; uniform float sunK; varying vec3 vP;
+      void main(){ vec3 d = normalize(vP);
+        vec3 c = d.y > 0. ? mix(bottomColor, topColor, pow(d.y, .6)) : mix(bottomColor * .6, ground, min(1., -d.y * 6.));
+        c += vec3(1.,.95,.85) * sunK * pow(max(dot(d, sunDir), 0.), 180.);
+        gl_FragColor = vec4(c, 1.); }`,
+  })));
+  const D = { top: new THREE.Color(0x6f9ad0), bottom: new THREE.Color(0xdde8f2), ground: new THREE.Color(0x6a6258), sun: 40 };
+  const N = { top: new THREE.Color(0x13214a), bottom: new THREE.Color(0x5a5670), ground: new THREE.Color(0x2a2522), sun: 0 };
+  const cubeRT = new THREE.WebGLCubeRenderTarget(64, { type: THREE.HalfFloatType });
+  const cubeCam = new THREE.CubeCamera(0.1, 200, cubeRT);
+  let target = null, lastB = -1;
+  function render(b, into) {
+    u.topColor.value.copy(D.top).lerp(N.top, b);
+    u.bottomColor.value.copy(D.bottom).lerp(N.bottom, b);
+    u.ground.value.copy(D.ground).lerp(N.ground, b);
+    u.sunK.value = D.sun * (1 - b) ** 2;
+    cubeCam.update(renderer, es);
+    return pmrem.fromCubemap(cubeRT.texture, into);
+  }
+  // re-filter at most every ~3.5% of the blend (≈ every other frame of a
+  // day↔night fade), always exactly at the ends
+  function update(b) {
+    if (target && (b === lastB || (Math.abs(b - lastB) < 0.035 && b !== 0 && b !== 1))) return target.texture;
+    lastB = b;
+    target = render(b, target);
+    return target.texture;
+  }
+  const day = render(0, null).texture;       // fixed daylight copy (train pictures)
+  return { update, day };
 })();
-scene.environment = envMaps.day;
+scene.environment = envMaps.update(0);
+
+/* ---------- station lighting at night ----------
+   Emissive surfaces don't light anything, so the platform lamps are
+   modelled as warm line lights under each canopy, evaluated in every
+   MeshStandardMaterial (a small shader hook, 7 lines, no shadow maps):
+   the deck, the car sides facing the platform, bogies and rails beside
+   it get real, falling-off light. The Marunouchi facade gets a warm
+   floodlight from the plaza. Off (zero cost beyond one branch) by day. */
+const stationU = {
+  uNight: { value: 0 },
+  // per platform: centre x, bow weight, centre z, half length
+  uPlat: { value: PLATFORMS.map(p => new THREE.Vector4(p.x, p.bw, p.off, p.len / 2)) },
+};
+const STATION_GLSL = `
+uniform float uNight;
+uniform vec4 uPlat[7];
+vec3 stationIrr(vec3 pv, vec3 nv) {
+  if (uNight < 0.01) return vec3(0.);
+  mat3 R = transpose(mat3(viewMatrix));
+  vec3 p = cameraPosition + R * pv;
+  // most of the city is nowhere near a lamp: bail out before any maths
+  if (abs(p.z) > 200. && p.y > 3.) return vec3(0.);
+  vec3 n = normalize(R * nv);
+  float z = p.z;
+  float k = clamp((z + ${Z_END.toFixed(1)}) / ${(2 * Z_END).toFixed(1)}, 0., 1.);
+  float lean = ${BEND_AMP.toFixed(1)} * (k * k * (3. - 2. * k) * 2. - 1.);
+  float bow = abs(z) <= 230. ? -(1. + cos(3.14159265 * z / 230.)) * 5.5 : 0.;
+  float acc = 0.;
+  float lampY = ${(DECK + PLAT_Y + 3.3).toFixed(2)};
+  if (p.y < lampY + 0.35 && p.y > ${(DECK - 1).toFixed(1)}) {
+    for (int i = 0; i < 7; i++) {
+      vec4 P = uPlat[i];
+      float zin = 1. - smoothstep(P.w - 8., P.w + 3., abs(z - P.z));
+      if (zin <= 0.) continue;
+      vec2 L = vec2(P.x + lean + P.y * bow - p.x, lampY - p.y);
+      float d2 = dot(L, L);
+      if (d2 > 130.) continue;
+      vec2 l = L * inversesqrt(d2 + 1e-3);
+      // lamps run the length of the platform, so faces pointing along it
+      // (cab fronts) are lit by the lamps ahead of them too
+      float ndl = clamp((dot(n.xy, l) + 0.25) / 1.25, 0., 1.) + 0.5 * abs(n.z);
+      float pool = 0.82 + 0.18 * cos(6.2831853 * z / 7.);
+      acc += zin * ndl * pool * (1. - d2 / 130.) / (1. + d2 / 7.);
+    }
+  }
+  // the many lamps of the whole train shed add up to a soft warm fill at
+  // track level (bogies, rails and the far car sides stay readable), fading
+  // out past the platform ends
+  float shed = (1. - smoothstep(130., 180., abs(z))) * step(${(DECK - 1).toFixed(1)}, p.y) * step(p.y, lampY + 0.35);
+  acc += shed * 0.11 * (0.55 + 0.45 * max(n.y, 0.));
+  vec3 c = vec3(1.0, 0.80, 0.56) * acc * 5.0;
+  // floodlit Marunouchi facade (west faces of the brick station)
+  float fx = step(-78., p.x) * step(p.x, -54.) * (1. - smoothstep(118., 128., abs(z)));
+  c += vec3(1.0, 0.74, 0.46) * fx * max(-n.x, 0.) * (0.5 + 0.5 * clamp(1. - p.y / 26., 0., 1.)) * 1.6;
+  return c * uNight;
+}
+`;
+function patchStation(shader) {
+  shader.uniforms.uNight = stationU.uNight;
+  shader.uniforms.uPlat = stationU.uPlat;
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', '#include <common>\n' + STATION_GLSL)
+    .replace('#include <lights_fragment_maps>', '#include <lights_fragment_maps>\n\tirradiance += stationIrr(-vViewPosition, normal);');
+}
+// every standard material gets the hook (materials with their own
+// onBeforeCompile call patchStation themselves)
+THREE.MeshStandardMaterial.prototype.onBeforeCompile = patchStation;
 
 const starGeo = new THREE.BufferGeometry();
 {
@@ -1186,7 +1322,7 @@ mergeStatic(railBits, scene, 400);
 /* ================================================================
    Platforms — long arched roofs in mint/white like the photo
 ================================================================ */
-const roofLightMat = new THREE.MeshStandardMaterial({ color: 0xfff6dd, emissive: 0xffeebb, emissiveIntensity: 0 });
+const roofLightMat = new THREE.MeshStandardMaterial({ color: 0xfff6dd, emissive: 0xffe2b0, emissiveIntensity: 0, side: THREE.DoubleSide });
 // platform deck: at night warm pools of light fall under each canopy lamp
 // (an emissive pattern — far cheaper than dozens of real point lights)
 const platLightMat = new THREE.MeshStandardMaterial({
@@ -1243,15 +1379,17 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null)
   // wide, shallow GABLE roofs (two straight slopes meeting at a low
   // ridge) — like the real platform canopies, not a steep arch. 9.6m
   // wide so the yard reads as a near-solid deck with slim track slits.
-  const HW = 4.0, EAVE = 4.55, RIDGE = 5.25;
+  // canopy: raised with the platform (≈3.4m clear above it) and trimmed
+  // back so its eaves stay clear of the pantographs over the tracks
+  const HW = 3.55, EAVE = PLAT_Y + 3.45, RIDGE = PLAT_Y + 4.15;
   const archProfile = [
     [-HW, EAVE], [-HW * 0.5, (EAVE + RIDGE) / 2 + 0.08], [0, RIDGE],
     [HW * 0.5, (EAVE + RIDGE) / 2 + 0.08], [HW, EAVE],
   ];
   const eaveProfile = [[-HW, EAVE], [-HW, EAVE - 0.35]];   // thin fascia
   const eaveProfileR = [[HW, EAVE], [HW, EAVE - 0.35]];
-  const deckProfile = [[-2.6, 0], [-2.6, 1.1], [2.6, 1.1], [2.6, 0]];
-  const pillarGeo = new THREE.CylinderGeometry(0.13, 0.13, 3.9, 8);
+  const deckProfile = [[-2.6, 0], [-2.6, PLAT_Y], [2.6, PLAT_Y], [2.6, 0]];
+  const pillarGeo = new THREE.CylinderGeometry(0.13, 0.13, EAVE + 0.35 - PLAT_Y, 8);
   const pillarMat = new THREE.MeshStandardMaterial({ color: 0x5e6a72, roughness: 0.6, metalness: 0.4 });
   const totalPillars = PLATFORMS.reduce((s, p) => s + Math.floor(p.len / 14), 0);
   const pillars = new THREE.InstancedMesh(pillarGeo, pillarMat, totalPillars);
@@ -1267,19 +1405,19 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null)
     // platform) reads as a pale canopy, not a muddy brown ceiling
     const archMat = new THREE.MeshStandardMaterial({
       color: roofColors[i % roofColors.length], roughness: 0.65, side: THREE.DoubleSide,
-      emissive: roofColors[i % roofColors.length], emissiveIntensity: 0.22 });
+      emissive: roofColors[i % roofColors.length], emissiveIntensity: 0.12 });
     const roof = sweepProfile(cx, zP0 - 2, zP1 + 2, archProfile, archMat, 0.25, taper);
     registerFadeable(roof);
     platBits.push(
       sweepProfile(cx, zP0 - 2, zP1 + 2, eaveProfile, fasciaMat, 0.25, taper),
       sweepProfile(cx, zP0 - 2, zP1 + 2, eaveProfileR, fasciaMat, 0.25, taper),
-      sweepProfile(cx, zP0 + 6, zP1 - 6, [[-0.3, RIDGE - 0.02], [0.3, RIDGE - 0.02]], roofLightMat),
-      sweepProfile(cx, zP0, zP1, [[-2.45, 1.115], [-2.15, 1.115]], yellowMat, 0.25, taper),
-      sweepProfile(cx, zP0, zP1, [[2.15, 1.115], [2.45, 1.115]], yellowMat, 0.25, taper));
+      sweepProfile(cx, zP0 + 6, zP1 - 6, [[0.22, EAVE - 0.12], [-0.22, EAVE - 0.12]], roofLightMat),
+      sweepProfile(cx, zP0, zP1, [[-2.45, PLAT_Y + 0.015], [-2.15, PLAT_Y + 0.015]], yellowMat, 0.25, taper),
+      sweepProfile(cx, zP0, zP1, [[2.15, PLAT_Y + 0.015], [2.45, PLAT_Y + 0.015]], yellowMat, 0.25, taper));
     const nP = Math.floor(len / 14);
     for (let k = 0; k < nP; k++) {
       const z = zP0 + 7 + k * 14;
-      m.makeTranslation(cx(z), DECK + 3.05, z);
+      m.makeTranslation(cx(z), DECK + (PLAT_Y + EAVE + 0.35) / 2, z);
       pillars.setMatrixAt(pi++, m);
     }
   });
@@ -1323,10 +1461,10 @@ const PLAT_INFO = [
     for (const dz of [-55, 55]) {
       const z = p.off + dz, x = p.x + bendFor(p.bw, z);
       const board = new THREE.Mesh(new THREE.PlaneGeometry(3.0, 0.8), mat);
-      board.position.set(x, DECK + 3.7, z);           // face down the platform
+      board.position.set(x, DECK + PLAT_Y + 2.6, z);  // face down the platform
       scene.add(board);
       const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.9, 0.1), postMat);
-      post.position.set(x, DECK + 4.55, z); scene.add(post);
+      post.position.set(x, DECK + PLAT_Y + 3.45, z); scene.add(post);
       signBits.push(board, post);
     }
   });
@@ -1516,7 +1654,7 @@ const props = new THREE.Group();
 detailGroup.add(props);
 {
   const prng = (() => { let s = 99173; return () => (s = s * 16807 % 2147483647) / 2147483647; })();
-  const surf = DECK + 1.1;
+  const surf = DECK + PLAT_Y;
   const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler();
   const _p2 = new THREE.Vector3(), _s = new THREE.Vector3(1, 1, 1);
   const mat4 = (x, y, z, ry = 0) => { _e.set(0, ry, 0); _q.setFromEuler(_e); _p2.set(x, y, z); return _m.compose(_p2, _q, _s).clone(); };
@@ -1901,6 +2039,85 @@ function plainUV(g, from, to) {
 }
 const plainTop = g => plainUV(g, 8, 16);
 const plainAll = g => plainUV(g, 0, g.attributes.uv.count);
+/* ---------- per-building night windows ----------
+   Each building has a fixed seed. In the shader, the SAME window grid the
+   day facade canvas was painted on (per style: origin, pitch, cell size,
+   cells per tile) is rebuilt from the UV, so light only ever falls inside
+   a real window cell. Floors are counted from the ground across tiles and
+   columns across the whole face, so nothing repeats. Lighting is decided
+   per floor-band and per office zone (runs of 3–6 windows), with a
+   building "character": mostly dark / a few floors on / busy office /
+   bright shops at street level; colour temperature varies a little per
+   building and zone between warm 3000K and cool 4500K — no rainbow.
+   Faces get different patterns, the grid stays the same. Nothing is
+   re-randomised per frame: it's a pure function of seed + position. */
+const WIN_GRID = [
+  // x0, pitchX, cellW, cols, y0, pitchY, cellH, rows   (canvas px, 128×256)
+  [4, 14, 12, 9, 4, 18, 16, 14],
+  [8, 18, 11, 6, 10, 24, 13, 10],
+  [4, 16, 13, 8, 8, 20, 10, 12],
+];
+const WINDOW_GLSL = `
+uniform float uSeed;
+uniform vec4 uGridX, uGridY;
+float hsh(vec3 p) { p = fract(p * 0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
+vec3 cityWindow(vec2 uv, vec3 nWorld) {
+  if (abs(nWorld.y) > 0.5) return vec3(0.);
+  vec2 tile = floor(uv), f = fract(uv);
+  float px = f.x * 128., py = (1. - f.y) * 256.;
+  float cx = floor((px - uGridX.x) / uGridX.y), cy = floor((py - uGridY.x) / uGridY.y);
+  if (cx < 0. || cx >= uGridX.w || cy < 0. || cy >= uGridY.w) return vec3(0.);
+  if (px - uGridX.x - cx * uGridX.y > uGridX.z || py - uGridY.x - cy * uGridY.y > uGridY.z) return vec3(0.);
+  float col = tile.x * uGridX.w + cx;
+  float flo = tile.y * uGridY.w + (uGridY.w - 1. - cy);
+  float face = dot(floor(nWorld.xz + 0.5), vec2(1., 2.)) + 3.;
+  float s = uSeed;
+  float kind = hsh(vec3(s, 1.7, 3.1));
+  float pFloor = kind < .24 ? .3 : kind < .5 ? .42 : kind < .82 ? .88 : .3;
+  float pZone  = kind < .24 ? .3 : kind < .5 ? .85 : kind < .82 ? .62 : .45;
+  // floors switch in bands of 1–3 storeys
+  float band = floor(flo / (1. + floor(hsh(vec3(s, face, 5.3)) * 3.)));
+  bool floorOn = hsh(vec3(s, face + 11., band)) < pFloor;
+  // office zones: runs of 3–6 windows, offset per floor
+  float zw = 3. + floor(hsh(vec3(s, face, flo + 0.5)) * 4.);
+  float zone = floor((col + floor(hsh(vec3(s, flo, 9.1)) * zw)) / zw);
+  float zr = hsh(vec3(s + face * 7., flo, zone));
+  bool on = floorOn && zr < pZone;
+  bool shop = kind >= .82 && flo < 2.;
+  if (shop) on = true;
+  if (on && hsh(vec3(col, flo, s + face)) < .08) on = false;     // odd dark window
+  if (!on) return vec3(0.);
+  float temp = clamp(hsh(vec3(s, 2.2, 7.7)) * .8 + (hsh(vec3(s, zone, flo * .37)) - .5) * .25, 0., 1.);
+  vec3 warm = vec3(1., .72, .42), neutral = vec3(1., .88, .70), cool = vec3(.84, .9, 1.);
+  vec3 c = temp < .5 ? mix(warm, neutral, temp * 2.) : mix(neutral, cool, temp * 2. - 1.);
+  float lvl = shop ? 1.25 : .5 + .5 * hsh(vec3(zone, s, flo + face));
+  return c * lvl;
+}
+`;
+const winUVTex = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+winUVTex.needsUpdate = true;
+winUVTex.wrapS = winUVTex.wrapT = THREE.RepeatWrapping;
+let citySeed = 0;
+function cityWindowMaterial(style, opts) {
+  const mat = new THREE.MeshStandardMaterial({
+    map: facadeDay[style].clone(), emissiveMap: winUVTex.clone(),
+    emissive: 0xffffff, emissiveIntensity: 0, ...opts,
+  });
+  const g = WIN_GRID[style], seed = 17 + (citySeed++) * 37.13;
+  mat.onBeforeCompile = shader => {
+    patchStation(shader);
+    shader.uniforms.uSeed = { value: seed };
+    shader.uniforms.uGridX = { value: new THREE.Vector4(g[0], g[1], g[2], g[3]) };
+    shader.uniforms.uGridY = { value: new THREE.Vector4(g[4], g[5], g[6], g[7]) };
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\n' + WINDOW_GLSL)
+      // mid-ground walls sit a step darker than the lit foreground at night
+      .replace('#include <map_fragment>', '#include <map_fragment>\n\tdiffuseColor.rgb *= 1. - 0.5 * uNight;')
+      .replace('#include <emissivemap_fragment>',
+        'totalEmissiveRadiance *= cityWindow(vEmissiveMapUv, normalize(transpose(mat3(viewMatrix)) * normal));');
+  };
+  return mat;
+}
 function setFacadeRepeat(mat, rx, ry) {
   mat.map.repeat.set(rx, ry);
   mat.emissiveMap.repeat.set(rx, ry);
@@ -1913,10 +2130,7 @@ const cityFar = new THREE.Group();
   function makeBuilding(x, z, w, d, h, taper) {
     const g = new THREE.Group();
     const style = (rng() * 3) | 0;
-    const mat = new THREE.MeshStandardMaterial({
-      map: facadeDay[style].clone(),
-      emissiveMap: facadeNight[style].clone(),
-      emissive: 0xffffff, emissiveIntensity: 0,
+    const mat = cityWindowMaterial(style, {
       roughness: style === 0 ? 0.35 : 0.7,
       metalness: style === 0 ? 0.4 : 0.1,
     });
@@ -1982,10 +2196,7 @@ const cityFar = new THREE.Group();
 // (east) side of the yard, as in the satellite photo
 {
   const whiteMat = () => {
-    const mat = new THREE.MeshStandardMaterial({
-      map: facadeDay[2].clone(), emissiveMap: facadeNight[2].clone(),
-      emissive: 0xffffff, emissiveIntensity: 0, roughness: 0.5, metalness: 0.15,
-    });
+    const mat = cityWindowMaterial(2, { roughness: 0.5, metalness: 0.15 });
     cityMats.push(mat);
     return mat;
   };
@@ -2012,102 +2223,216 @@ for (const grp of [cityNear, cityFar])
 
 /* ================================================================
    Trains
+   Car coordinates: y = 0 is the viaduct deck, the rail head is at
+   RAIL_Y. Each type has its own cross-section profile (body width,
+   side-wall height, shoulder, crown, lower flare / tumblehome), its
+   own car length and its own cab — so an E235 no longer shares a
+   body with an N700.
 ================================================================ */
-const CAR_LEN = 19.5, CAR_W = 2.95, CAR_H = 3.2, CAR_GAP = 0.5;
-const carGeo = new THREE.BoxGeometry(CAR_W, CAR_H, CAR_LEN);
-const skirtGeo = new THREE.BoxGeometry(2.6, 0.5, CAR_LEN - 1);
+const CAR_LEN = 19.5, CAR_GAP = 0.5;       // CAR_LEN = commuter default
+/* profile parameters (metres; real references in comments)
+   commuter: wide-body 2950 at the belt line, tucked in to the sill
+   (すそ絞り); flat, wide crown with low elliptic shoulders. E235: the
+   flattest roof of the three; E233 a touch rounder; E231 in between.
+   The side texture strips (doors 1.3 × 1.85m) are 2.3m tall at true
+   scale → sill 1.56 … gutter 3.86 (≈1.03 … 3.33m above rail), roof
+   crown 4.15 (3.62m above rail).
+   shinkansen: rounded "egg" section, 3.36m wide, tumblehome at the
+   bottom, 25m cars. */
+const PROFILES = {
+  e235: { kind: 'c', w: 2.95, wSill: 2.80, sillY: 1.56, beltY: 2.30, gutterY: 3.83, roofY: 4.15, shoulder: 0.44, crown: 0.03, len: 19.5, bogie: 6.9 },
+  e233: { kind: 'c', w: 2.95, wSill: 2.80, sillY: 1.56, beltY: 2.30, gutterY: 3.80, roofY: 4.15, shoulder: 0.60, crown: 0.07, len: 19.5, bogie: 6.9 },
+  e231: { kind: 'c', w: 2.95, wSill: 2.78, sillY: 1.56, beltY: 2.26, gutterY: 3.83, roofY: 4.16, shoulder: 0.52, crown: 0.05, len: 19.5, bogie: 6.9 },
+  n700: { kind: 's', hw: 1.68, cy: 2.33, hh: 1.80, n: 2.5, m: 2.25, a0: -56, aRoof: 60, len: 25, bogie: 8.75 },
+  e5:   { kind: 's', hw: 1.675, cy: 2.38, hh: 1.80, n: 3.1, m: 2.6, a0: -53, aRoof: 62, len: 25, bogie: 8.75 },
+};
+const profileCache = {};
+// right half of the section, bottom → crown, split into side / roof parts
+function profileOf(key) {
+  if (profileCache[key]) return profileCache[key];
+  const P = PROFILES[key];
+  const side = [], roof = [];
+  if (P.kind === 'c') {
+    for (let k = 0; k <= 5; k++) {                       // lower flare
+      const f = k / 5;
+      side.push([P.wSill / 2 + (P.w - P.wSill) / 2 * Math.sin(f * Math.PI / 2), P.sillY + (P.beltY - P.sillY) * f]);
+    }
+    side.push([P.w / 2, P.gutterY]);
+    const sx = P.w / 2 - P.shoulder, sy = P.gutterY, ry = P.roofY - P.crown - P.gutterY;
+    for (let k = 0; k <= 7; k++) {                       // elliptic shoulder
+      const a = k / 7 * Math.PI / 2;
+      roof.push([sx + P.shoulder * Math.cos(a), sy + ry * Math.sin(a)]);
+    }
+    for (let k = 1; k <= 5; k++) {                       // almost-flat crown
+      const x = sx * (1 - k / 5);
+      roof.push([x, P.roofY - P.crown * (x / sx) ** 2]);
+    }
+    P.bottomY = P.sillY; P.topY = P.roofY; P.halfW = P.w / 2;
+  } else {
+    const pt = deg => {
+      const a = deg * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+      return [P.hw * Math.sign(c) * Math.abs(c) ** (2 / P.n), P.cy + P.hh * Math.sign(s) * Math.abs(s) ** (2 / P.m)];
+    };
+    for (let d = P.a0; d <= P.aRoof; d += (P.aRoof - P.a0) / 14) side.push(pt(d));
+    for (let d = P.aRoof; d <= 90.001; d += (90 - P.aRoof) / 6) roof.push(pt(d));
+    roof[roof.length - 1] = [0, P.cy + P.hh];
+    P.bottomY = side[0][1]; P.topY = P.cy + P.hh; P.halfW = P.hw;
+  }
+  // the full closed ring (belly → right → crown → left → belly), used by
+  // cab faces, end caps and the Shinkansen nose lofts
+  const right = [[0, P.bottomY], ...side, ...roof.slice(1)];
+  const ring = [...right, ...right.slice(0, -1).reverse().map(([x, y]) => [-x, y])];
+  const halfWAt = y => {       // body half-width at height y
+    let best = 0;
+    const pts = [...side, ...roof];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const [x0, y0] = pts[i], [x1, y1] = pts[i + 1];
+      if ((y - y0) * (y - y1) <= 0 && y1 !== y0) best = Math.max(best, x0 + (x1 - x0) * (y - y0) / (y1 - y0));
+    }
+    return best;
+  };
+  return (profileCache[key] = { P, side, roof, ring, halfWAt });
+}
+const arcLens = pts => { const a = [0]; for (let i = 1; i < pts.length; i++) a.push(a[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1])); return a; };
+// extrude a 2D polyline along z (length L); uv: u along the car, v along
+// the polyline (or swapped for the roof strip, which is baked across)
+function stripGeo(pts, L, uAlongZ, mirror) {
+  const pos = [], uv = [], idx = [];
+  const al = arcLens(pts), tot = al[al.length - 1] || 1;
+  pts.forEach(([x, y], i) => {
+    for (const z of [L / 2, -L / 2]) {
+      pos.push(mirror ? -x : x, y, z);
+      const along = mirror ? (z + L / 2) / L : (L / 2 - z) / L;
+      uv.push(...(uAlongZ ? [along, al[i] / tot] : [al[i] / tot, (z + L / 2) / L]));
+    }
+  });
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = i * 2, b = a + 1, c = a + 2, d = a + 3;
+    if (mirror) idx.push(a, c, b, b, c, d); else idx.push(a, b, c, b, d, c);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+function capGeo(ring, z, facing) {
+  const s = new THREE.Shape(ring.map(([x, y]) => new THREE.Vector2(x, y)));
+  const g = new THREE.ShapeGeometry(s, 1);
+  if (facing < 0) g.rotateY(Math.PI);
+  g.translate(0, 0, z);
+  return g;
+}
+
 const bogiePlaneGeo = new THREE.PlaneGeometry(2.7, 1.3);
-const bogieCoreGeo = new THREE.BoxGeometry(2.2, 0.9, 2.3);
-const gangwayGeo = new THREE.BoxGeometry(1.5, 2.3, 0.55);
-const roofCarMat = new THREE.MeshStandardMaterial({ color: 0xb0b4b8, roughness: 0.6 });
+const bogieCoreGeo = new THREE.BoxGeometry(2.1, 0.7, 2.3);
+const gangwayGeo = new THREE.BoxGeometry(1.2, 2.1, 0.55);
+const roofCarMat = new THREE.MeshStandardMaterial({ color: 0xa9aeb3, roughness: 0.55, metalness: 0.3 });
 const darkMat = new THREE.MeshStandardMaterial({ color: 0x24272b, roughness: 0.9 });
 const endMat = new THREE.MeshStandardMaterial({ color: 0x9da2a7, roughness: 0.7 });
-const acGeo = new THREE.BoxGeometry(1.7, 0.26, 3.0);
 
-// curved roof cap: arc chord = car width, peak ~0.35m above the body top
-const ROOF_R = 3.4, ROOF_HALF = 0.45;
-const roofCapGeo = new THREE.CylinderGeometry(
-  ROOF_R, ROOF_R, CAR_LEN, 14, 1, true, Math.PI - ROOF_HALF, ROOF_HALF * 2);
-const ROOF_Y = 4.15 - ROOF_R * Math.cos(ROOF_HALF);   // arc peak ≈ 4.49
-// cab-end face shaped to the body+roof-cap silhouette. UVs preserve the
-// face texture's native aspect: the texture fills the body-front HEIGHT
-// (0.55→4.15) and is centred/cropped horizontally so it never looks
-// vertically stretched (texW,texH = the face region's pixel size)
-function makeCabFace(texW, texH) {
-  const s = new THREE.Shape();
-  s.moveTo(-CAR_W / 2, 0.55);
-  s.lineTo(-CAR_W / 2, 4.15);
-  for (let i = 0; i <= 10; i++) {
-    const a = -ROOF_HALF + (2 * ROOF_HALF) * (i / 10);
-    s.lineTo(ROOF_R * Math.sin(a), 4.15 - ROOF_R * Math.cos(ROOF_HALF) + ROOF_R * Math.cos(a));
-  }
-  s.lineTo(CAR_W / 2, 4.15);
-  s.lineTo(CAR_W / 2, 0.55);
-  s.closePath();
-  const g = new THREE.ShapeGeometry(s, 4);
-  const bodyH = 4.15 - 0.55;
-  const worldW = bodyH * (texW / texH);   // width that keeps texture aspect
+/* cab face for the flat-fronted commuters: the outline follows the car's
+   own section (so the roof edge meets the face with no gap or lip) and
+   steps in to the skirt below the sill. The face texture keeps its true
+   aspect: it spans the full body width and its height sets where the
+   front skirt ends. */
+function makeCabFace(profKey, texW, texH) {
+  const { P, ring } = profileOf(profKey);
+  const topY = P.topY, faceH = P.w * (texH / texW), botY = topY - faceH;
+  const body = ring.slice(1, -1);            // skip the belly centre points
+  const outline = [[-P.wSill / 2 + 0.12, botY], [P.wSill / 2 - 0.12, botY], ...body.filter(([x]) => x > 0),
+    ...body.filter(([x]) => x <= 0)];
+  const s = new THREE.Shape(outline.map(([x, y]) => new THREE.Vector2(x, y)));
+  const g = new THREE.ShapeGeometry(s, 2);
   const uvA = g.attributes.uv, pA = g.attributes.position;
-  const cl = v => Math.min(1, Math.max(0, v));
   for (let i = 0; i < uvA.count; i++)
-    uvA.setXY(i, cl(0.5 + pA.getX(i) / worldW), cl((pA.getY(i) - 0.55) / bodyH));
+    uvA.setXY(i, 0.5 + pA.getX(i) / P.w, (pA.getY(i) - botY) / faceH);
+  g.userData.botY = botY;
   return g;
 }
 const cabFaceCache = {};
-function cabFaceGeoFor(texW, texH) {
-  const k = texW + 'x' + texH;
-  return cabFaceCache[k] || (cabFaceCache[k] = makeCabFace(texW, texH));
+function cabFaceGeoFor(profKey, texW, texH) {
+  const k = profKey + ':' + texW + 'x' + texH;
+  return cabFaceCache[k] || (cabFaceCache[k] = makeCabFace(profKey, texW, texH));
 }
 
-/* ---------- lofted duckbill nose (E5 / N700) ----------
-   cross-sections morph from the car-body silhouette at the joint to a
-   flat ellipse at the tip; built once per nose length and cached */
+/* ---------- Shinkansen noses, lofted from the real body section ----------
+   Every cross-section is the car's own ring, squeezed per height band:
+   N700 "aero double wing" keeps its wide lower wings while the crown
+   drops quickly; E5's 15m nose runs long and flat into a duckbill with a
+   raised cockpit. Built once per type and cached. */
+const NOSE = {
+  // top(t): 1 at the joint → 0 at the tip; a power > 1 keeps the crown
+  // high over the cab and then sweeps down (a convex, not a wedge, line)
+  n700: { len: 10.5, sxBot: t => 1 - 0.3 * t ** 2.3, sxTop: t => 1 - 0.8 * t ** 1.3,
+          top: t => 1 - t ** 1.55, topTip: 1.95, bot: t => t ** 2.6, botTip: 1.0, canopyT: 0.3, tipR: 0.45 },
+  e5:   { len: 15, sxBot: t => 1 - 0.45 * t ** 2.1, sxTop: t => 1 - 0.78 * t ** 1.5,
+          top: t => 1 - t ** 1.3, topTip: 1.72, bot: t => t ** 2.2, botTip: 0.98, canopyT: 0.3, tipR: 0.38 },
+};
 const noseGeoCache = {};
-function getNoseGeo(len) {
-  if (noseGeoCache[len]) return noseGeoCache[len];
-  const segs = 26, ring = 26;
-  const pos = [], uvs = [], idx = [];
+function noseFrame(profKey, t) {
+  const { P } = profileOf(profKey), N = NOSE[profKey];
+  const top = N.topTip + (P.topY - N.topTip) * N.top(t);
+  const bot = P.bottomY + (N.botTip - P.bottomY) * N.bot(t);
+  return { top, bot };
+}
+function getNoseGeo(profKey) {
+  if (noseGeoCache[profKey]) return noseGeoCache[profKey];
+  const { P, ring } = profileOf(profKey), N = NOSE[profKey], len = N.len;
+  // resample the ring evenly by arc length so the nose skin maps evenly
+  const al = arcLens(ring), tot = al[al.length - 1], R = 32, rs = [];
+  for (let k = 0; k <= R; k++) {
+    const d = tot * k / R;
+    let i = 1; while (i < al.length - 1 && al[i] < d) i++;
+    const f = (d - al[i - 1]) / (al[i] - al[i - 1] || 1);
+    rs.push([lerp(ring[i - 1][0], ring[i][0], f), lerp(ring[i - 1][1], ring[i][1], f)]);
+  }
+  const segs = 30, pos = [], uvs = [], idx = [];
   for (let i = 0; i <= segs; i++) {
-    const t = i / segs;
-    const w = CAR_W * (1 - 0.06 * t - 0.62 * Math.pow(t, 2.1));
-    const top = lerp(4.32, 1.32, Math.pow(t, 1.5));
-    const bot = lerp(0.55, 0.98, Math.pow(t, 2.4));
-    const cy = (top + bot) / 2, hh = Math.max(0.06, (top - bot) / 2);
-    for (let k = 0; k <= ring; k++) {
-      const a = k / ring;
-      const phi = a * Math.PI * 2 - Math.PI / 2;     // a=0 belly, a=0.5 roof
-      const cx = Math.cos(phi), sy = Math.sin(phi);
-      // superellipse squash → flatter sides and roof, like the real shell
-      const px = (w / 2) * Math.sign(cx) * Math.pow(Math.abs(cx), 0.72);
-      const py = cy + hh * Math.sign(sy) * Math.pow(Math.abs(sy), 0.82);
-      pos.push(px, py, t * len);
-      uvs.push(a, t);
+    const t = i / segs, { top, bot } = noseFrame(profKey, t);
+    for (let k = 0; k <= R; k++) {
+      const [x, y] = rs[k];
+      const yn = (y - P.bottomY) / (P.topY - P.bottomY);
+      const sx = lerp(N.sxBot(t), N.sxTop(t), smooth(Math.min(1, Math.max(0, yn))));
+      pos.push(x * sx, bot + yn * (top - bot), t * len);
+      uvs.push(k / R, t);
     }
   }
   for (let i = 0; i < segs; i++)
-    for (let k = 0; k < ring; k++) {
-      const a = i * (ring + 1) + k, b = a + ring + 1;
+    for (let k = 0; k < R; k++) {
+      const a = i * (R + 1) + k, b = a + R + 1;
       idx.push(a, a + 1, b, b, a + 1, b + 1);
     }
-  // tip cap fan
-  const tip = pos.length / 3;
-  pos.push(0, (1.32 + 0.98) / 2, len + 0.04);
-  uvs.push(0.5, 1);
-  const last = segs * (ring + 1);
-  for (let k = 0; k < ring; k++) idx.push(last + k, last + k + 1, tip);
+  // blunt, rounded tip: the last ring shrinks toward its centre along a
+  // quarter circle instead of collapsing to a knife edge
+  const f1 = noseFrame(profKey, 1), cyT = (f1.top + f1.bot) / 2, base = segs * (R + 1);
+  const RT = 4;
+  for (let q = 1; q <= RT; q++) {
+    const th = q / RT * Math.PI / 2, sc = Math.cos(th), dz = N.tipR * Math.sin(th);
+    for (let k = 0; k <= R; k++) {
+      const j = (base + k) * 3;
+      pos.push(pos[j] * sc, cyT + (pos[j + 1] - cyT) * sc, len + dz);
+      uvs.push(k / R, 1);
+    }
+  }
+  for (let i = segs; i < segs + RT; i++)
+    for (let k = 0; k < R; k++) {
+      const a = i * (R + 1) + k, b = a + R + 1;
+      idx.push(a, a + 1, b, b, a + 1, b + 1);
+    }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   geo.setIndex(idx);
   geo.computeVertexNormals();
-  noseGeoCache[len] = geo;
-  return geo;
+  return (noseGeoCache[profKey] = geo);
 }
 const noseGlassMat = new THREE.MeshStandardMaterial({ color: 0x0c1116, roughness: 0.15, metalness: 0.55 });
 // commuter cab front skirt + coupler, merged (local z=0 is the car end)
 const cabGearGeo = BufferGeometryUtils.mergeGeometries([
-  new THREE.BoxGeometry(2.3, 0.6, 0.5).translate(0, 0.75, -0.1),
-  new THREE.BoxGeometry(0.28, 0.34, 0.7).translate(0, 0.62, 0.3),
+  new THREE.BoxGeometry(2.2, 0.5, 0.34).translate(0, 0.78, -0.2),
+  new THREE.BoxGeometry(0.28, 0.3, 0.7).translate(0, 0.9, 0.3),
 ]);
 // additive lamp halos — nearly invisible by day, a soft bloom at night
 const haloTex = (() => {
@@ -2130,32 +2455,32 @@ const yamanoteMats = {
 };
 
 const trainTypes = {
-  yamanote: { name: '야마노테선 E235', nameJa: '山手線 E235系', atlas: true, cars: 8, maxSpeed: 22, dwell: 8 },
+  yamanote: { name: '야마노테선 E235', nameJa: '山手線 E235系', atlas: true, profile: 'e235', cars: 8, maxSpeed: 22, dwell: 8 },
   keihin: {
-    name: '케이힌토호쿠선 E233', nameJa: '京浜東北線 E233系', k233Atlas: true,
+    name: '케이힌토호쿠선 E233', nameJa: '京浜東北線 E233系', k233Atlas: true, profile: 'e233',
     sideClosed: commuterSide('#56b4e0', false),
     face: commuterFace('#56b4e0'), cars: 8, maxSpeed: 22, dwell: 7,
   },
   chuo: {
-    name: '츄오선 쾌속 E233', nameJa: '中央線快速 E233系',
+    name: '츄오선 쾌속 E233', nameJa: '中央線快速 E233系', profile: 'e233', band: ['#f15a22'], mats: {},
     sideClosed: commuterSide('#e07b39', false),
     face: commuterFace('#e07b39'), cars: 8, maxSpeed: 23, dwell: 14,
   },
   ueno: {
-    name: '우에노도쿄라인 E231', nameJa: '上野東京ライン E231系',
+    name: '우에노도쿄라인 E231', nameJa: '上野東京ライン E231系', profile: 'e231', band: ['#f68b1e', '#1b9c6b'], mats: {},
     sideClosed: commuterSide('#f0a050', false, '#4cae8e'),
     face: commuterFace('#f0a050'), cars: 8, maxSpeed: 23, dwell: 7,
   },
   tokaido: {
     name: '도카이도 신칸센 N700', nameJa: '東海道新幹線 N700系',
     sideClosed: shinkansenSide(null, '#1565c0'),
-    face: null, noseLen: 9, noseTex: n700NoseTex, roofColor: 0xe8ecef,
+    face: null, profile: 'n700', noseLen: NOSE.n700.len, noseTex: n700NoseTex, roofColor: 0xe8ecef,
     cars: 6, maxSpeed: 32, dwell: 16, shink: true,
   },
   tohoku: {
     name: '도호쿠 신칸센 E5 하야부사', nameJa: '東北新幹線 E5系 はやぶさ', e5Atlas: true,
     sideClosed: e5Side(),
-    face: null, noseLen: 13, noseTex: e5NoseTex, roofTex: e5Roof(),
+    face: null, profile: 'e5', noseLen: NOSE.e5.len, noseTex: e5NoseTex, roofTex: e5Roof(),
     cars: 6, maxSpeed: 32, dwell: 16, shink: true,
   },
 };
@@ -2207,52 +2532,81 @@ function bakeSlots(parts) {
 const S_SIDE_A = 0, S_SIDE_B = 1, S_ROOFTOP = 2, S_DARK = 3, S_END = 4,
       S_ROOF = 5, S_UNDER = 6, S_BOGIE = 7, S_AC = 8;
 const carBakeCache = {};
-function carBake(isShink) {
-  const k = isShink ? 'shink' : 'commuter';
-  if (carBakeCache[k]) return carBakeCache[k];
+// one baked car per PROFILE (the cache key is the profile, never just
+// "commuter"/"shinkansen", so two different bodies can't be merged)
+function carBake(typeKey) {
+  const T = trainTypes[typeKey], key = T.profile;
+  if (carBakeCache[key]) return carBakeCache[key];
+  const { P, side, roof, ring } = profileOf(key), L = P.len, shink = P.kind === 's';
+  const roofArc = [...roof, ...roof.slice(0, -1).reverse().map(([x, y]) => [-x, y])];
+  const bw = side[0][0] * 2;
   const parts = [
-    [carGeo, [S_SIDE_A, S_SIDE_B, S_ROOFTOP, S_DARK, S_END, S_END], xform(0, 2.55, 0)],
-    [roofCapGeo, S_ROOF, xform(0, ROOF_Y, 0, Math.PI / 2)],
-    [skirtGeo, [S_UNDER, S_UNDER, S_DARK, S_DARK, S_DARK, S_DARK], xform(0, 0.72, 0)],
+    [stripGeo(side, L, true, false), S_SIDE_A],
+    [stripGeo(side, L, true, true), S_SIDE_B],
+    [stripGeo(roofArc, L, false, false), S_ROOF],
+    [capGeo(ring, L / 2, 1), S_END], [capGeo(ring, -L / 2, -1), S_END],
+    [new THREE.PlaneGeometry(bw, L).rotateX(Math.PI / 2).translate(0, P.bottomY, 0), S_DARK],
   ];
-  for (const bz of [-6.4, 6.4]) {
-    parts.push([bogieCoreGeo, S_DARK, xform(0, 0.7, bz)]);
-    for (const sx of [-1, 1])
-      parts.push([bogiePlaneGeo, S_BOGIE, xform(sx * 1.18, 0.75, bz, 0, sx > 0 ? Math.PI / 2 : -Math.PI / 2)]);
+  if (!shink) {
+    // under-floor equipment between the bogies, sills beyond them
+    const eh = P.sillY - 0.95;
+    parts.push([new THREE.BoxGeometry(2.5, eh, 2 * P.bogie - 3.3), [S_UNDER, S_UNDER, S_DARK, S_DARK, S_DARK, S_DARK],
+      xform(0, 0.95 + eh / 2, 0)]);
+    const el = L / 2 - P.bogie - 1.5;
+    for (const sz of [-1, 1])
+      parts.push([new THREE.BoxGeometry(2.6, 0.3, el), S_DARK, xform(0, P.sillY - 0.15, sz * (P.bogie + 1.5 + el / 2))]);
+    // roof air-conditioner: sits ON the flat crown (it is equipment, not
+    // part of the roof shape)
+    parts.push([new THREE.BoxGeometry(2.2, 0.34, 3.4), S_AC, xform(0, P.roofY + 0.15, -3.4)]);
   }
-  if (!isShink) parts.push([acGeo, S_AC, xform(0, 4.45, -3.4)]);
-  return (carBakeCache[k] = bakeSlots(parts));
+  for (const bz of [-P.bogie, P.bogie]) {
+    parts.push([bogieCoreGeo, S_DARK, xform(0, RAIL_Y + 0.62, bz)]);
+    for (const sx of [-1, 1])
+      parts.push([bogiePlaneGeo, S_BOGIE, xform(sx * (shink ? 1.05 : 1.18), RAIL_Y + 0.63, bz, 0, sx > 0 ? Math.PI / 2 : -Math.PI / 2)]);
+  }
+  return (carBakeCache[key] = bakeSlots(parts));
 }
-// pantograph (+ Shinkansen noise shields) as one small baked mesh
+// single-arm pantograph raised to the contact wire (y = 6.0), standing on
+// insulators on the type's own roof (+ Shinkansen noise shields)
 const pantoCache = {};
-function pantoBake(isShink) {
-  const k = isShink ? 's' : 'c';
-  if (pantoCache[k]) return pantoCache[k];
+function pantoBake(profKey) {
+  if (pantoCache[profKey]) return pantoCache[profKey];
+  const { P } = profileOf(profKey), shink = P.kind === 's';
+  const roofY = P.topY, base = roofY + 0.22, shoe = 5.96;
+  const bar = (y0, z0, y1, z1, t) => {
+    const len = Math.hypot(y1 - y0, z1 - z0);
+    return [new THREE.BoxGeometry(t, len, t), 0, xform(0, (y0 + y1) / 2, (z0 + z1) / 2, Math.atan2(z1 - z0, y1 - y0))];
+  };
+  const knee = [base + (shoe - base) * 0.5, 0.7];
   const parts = [
-    [new THREE.BoxGeometry(1.25, 0.07, 0.9), 0, xform(0, 4.6, 0)],
-    [new THREE.CylinderGeometry(0.05, 0.07, 0.18, 6), 0, xform(-0.45, 4.5, 0)],
-    [new THREE.CylinderGeometry(0.05, 0.07, 0.18, 6), 0, xform(0.45, 4.5, 0)],
-    [new THREE.BoxGeometry(0.07, 1.0, 0.07), 0, xform(0, 5.05, 0.32, 0.62)],
-    [new THREE.BoxGeometry(0.06, 1.0, 0.06), 0, xform(0, 5.85, -0.1, -0.7)],
-    [new THREE.BoxGeometry(1.5, 0.05, 0.24), 0, xform(0, 6.26, -0.42)],
+    [new THREE.BoxGeometry(1.25, 0.07, 0.9), 0, xform(0, base, 0)],
+    [new THREE.CylinderGeometry(0.05, 0.07, 0.22, 6), 0, xform(-0.45, roofY + 0.1, 0)],
+    [new THREE.CylinderGeometry(0.05, 0.07, 0.22, 6), 0, xform(0.45, roofY + 0.1, 0)],
+    bar(base, -0.35, knee[0], knee[1], 0.07),
+    bar(knee[0], knee[1], shoe - 0.03, -0.05, 0.055),
+    [new THREE.BoxGeometry(1.5, 0.05, 0.24), 0, xform(0, shoe, -0.05)],
   ];
-  if (isShink) for (const sx of [-1.35, 1.35])
-    parts.push([new THREE.BoxGeometry(0.12, 0.7, 3.6), 1, xform(sx, 4.7, 0)]);
-  return (pantoCache[k] = bakeSlots(parts));
+  if (shink) for (const sx of [-1.3, 1.3])
+    parts.push([new THREE.BoxGeometry(0.12, 0.7, 3.6), 1, xform(sx, roofY + 0.2, 0)]);
+  return (pantoCache[profKey] = bakeSlots(parts));
+}
+// marker/head lamps where each real front has them
+function lampSpec(typeKey) {
+  const T = trainTypes[typeKey], { P } = profileOf(T.profile);
+  if (typeKey === 'yamanote') return { x: 0.93, y: 3.84, dz: 0.06, r: 0.11 };      // E235: top corners
+  if (typeKey === 'keihin' || T.band) return { x: 1.15, y: 1.82, dz: 0.06, r: 0.11 };  // E233 face: lower corners
+  if (!T.shink) return { x: 1.01, y: P.topY - P.w + 0.41, dz: 0.06, r: 0.12 };     // painted faces
+  const N = NOSE[T.profile];
+  if (T.profile === 'e5') { const t = 0.44, f = noseFrame('e5', t); return { x: 0.24, y: f.top - 0.02, dz: t * N.len, r: 0.09 }; }
+  const t = 0.8, f = noseFrame('n700', t);
+  return { x: P.hw * N.sxBot(t) * 0.62, y: f.bot + 0.34 * (f.top - f.bot), dz: t * N.len, r: 0.1 };
 }
 const lampGeoCache = {};
-function lampPairGeo(isShink, e5) {
-  const k = (isShink ? 's' : 'c') + (e5 ? 'e5' : '');
-  if (lampGeoCache[k]) return lampGeoCache[k];
-  const r = isShink ? 0.1 : 0.13, gs = [];
-  for (const sx of [-0.3, 0.3]) {
-    const g = new THREE.SphereGeometry(r, 8, 8);
-    if (e5) g.translate(sx * 0.9, 3.42, 0);
-    else if (isShink) g.translate(sx, 1.62, 0);
-    else g.translate(sx * 3.17, 1.2, 0);
-    gs.push(g);
-  }
-  return (lampGeoCache[k] = BufferGeometryUtils.mergeGeometries(gs));
+function lampPairGeo(typeKey) {
+  if (lampGeoCache[typeKey]) return lampGeoCache[typeKey];
+  const L = lampSpec(typeKey), gs = [];
+  for (const sx of [-1, 1]) gs.push(new THREE.SphereGeometry(L.r, 8, 8).translate(sx * L.x, L.y, 0));
+  return (lampGeoCache[typeKey] = BufferGeometryUtils.mergeGeometries(gs));
 }
 const noseMatCache = {};
 
@@ -2288,10 +2642,11 @@ function buildTrain(typeKey) {
     sideMatB = sideMaterial(e5Mats.side2, 0.35, 0.15, e5Mats.side2Glow);
     roofMat = new THREE.MeshStandardMaterial({ map: e5Mats.roof, roughness: 0.45 });
     acMat = roofCarMat;
-  } else if (T.k233Atlas && keihinMats.side1) {
-    // Keihin-Tohoku E233 photo atlas
-    sideMatA = sideMaterial(keihinMats.side1, 0.42, 0.18, keihinMats.side1Glow);
-    sideMatB = sideMaterial(keihinMats.side2, 0.42, 0.18, keihinMats.side2Glow);
+  } else if ((T.k233Atlas && keihinMats.side1) || (T.band && T.mats.side1)) {
+    // E233 photo atlas (Keihin as shot; Chuo / Ueno-Tokyo re-banded)
+    const km = T.band ? T.mats : keihinMats;
+    sideMatA = sideMaterial(km.side1, 0.42, 0.18, keihinMats.side1Glow);
+    sideMatB = sideMaterial(km.side2, 0.42, 0.18, keihinMats.side2Glow);
     roofMat = new THREE.MeshStandardMaterial({ map: keihinMats.roof, roughness: 0.55 });
     acMat = roofCarMat;
   } else {
@@ -2301,7 +2656,7 @@ function buildTrain(typeKey) {
     else roofMat = roofCarMat;
     acMat = roofCarMat;
   }
-  const k233Gear = !!(T.k233Atlas && keihinMats.under);
+  const k233Gear = !!((T.k233Atlas || T.band) && keihinMats.under);
   const e5Gear = !!(T.e5Atlas && e5Mats.under);
   const underMat = new THREE.MeshStandardMaterial({
     map: e5Gear ? e5Mats.under : k233Gear ? keihinMats.under : yamanoteMats.under, roughness: 0.9 });
@@ -2310,7 +2665,8 @@ function buildTrain(typeKey) {
 
   // one instanced, multi-material body for every car of the consist
   const slotMats = [sideMatA, sideMatB, roofCarMat, darkMat, endMat, roofMat, underMat, bogieMat, acMat];
-  const bake = carBake(isShink);
+  const bake = carBake(typeKey);
+  const { P } = profileOf(T.profile), L = P.len;
   const body = new THREE.InstancedMesh(bake.geo, bake.slots.map(s => slotMats[s]), T.cars);
   body.castShadow = true;
   group.add(body);
@@ -2319,10 +2675,10 @@ function buildTrain(typeKey) {
   const gangway = new THREE.InstancedMesh(gangwayGeo, isShink ? endMat : darkMat, T.cars - 1);
   group.add(gangway);
   const gwLocal = isShink
-    ? xform(0, 2.45, -CAR_LEN / 2 - 0.05, 0, 0, 0, 1.6, 1.05, 1)
-    : xform(0, 2.5, -CAR_LEN / 2 - 0.05);
+    ? xform(0, 2.75, -L / 2 - 0.05, 0, 0, 0, 2.0, 1.2, 1)
+    : xform(0, 2.72, -L / 2 - 0.05);
 
-  const pb = pantoBake(isShink);
+  const pb = pantoBake(T.profile);
   const pantoMats = pb.slots.map(s => [darkMat, endMat][s]);
   for (let i = 0; i < T.cars; i++) {
     const car = new THREE.Object3D();          // transform carrier (+ cab/panto children)
@@ -2341,62 +2697,63 @@ function buildTrain(typeKey) {
       // sculpted duckbill nose lofted from the body silhouette
       const noseMat = noseMatCache[typeKey] || (noseMatCache[typeKey] = new THREE.MeshStandardMaterial({
         map: T.noseTex, roughness: 0.22, metalness: 0.28, side: THREE.DoubleSide }));
-      const nose = new THREE.Mesh(getNoseGeo(T.noseLen), noseMat);
-      nose.position.set(0, 0, sign * (CAR_LEN / 2 - 0.25));
+      const N = NOSE[T.profile];
+      const nose = new THREE.Mesh(getNoseGeo(T.profile), noseMat);
+      nose.position.set(0, 0, sign * (L / 2 - 0.02));
       if (sign < 0) nose.rotation.y = Math.PI;
       nose.castShadow = true;
       car.add(nose);
-      // cockpit canopy
+      // cockpit canopy, seated on the nose surface where the loft puts it
+      const ct = N.canopyT, cf = noseFrame(T.profile, ct);
       const ws = new THREE.Mesh(
         new THREE.SphereGeometry(0.62, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2), noseGlassMat);
-      ws.scale.set(1.05, 0.62, 1.9);
-      ws.position.set(0, 3.7, sign * (CAR_LEN / 2 + T.noseLen * 0.3));
+      ws.scale.set(T.profile === 'e5' ? 1.0 : 0.9, T.profile === 'e5' ? 0.55 : 0.32, 2.2);
+      ws.position.set(0, cf.top - 0.12, sign * (L / 2 + N.len * ct));
+      if (sign < 0) ws.rotation.y = Math.PI;
       car.add(ws);
-      // under-nose skirt
-      const skirtNose = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.5, 2.6), darkMat);
-      skirtNose.position.set(0, 0.62, sign * (CAR_LEN / 2 + T.noseLen * 0.3));
-      car.add(skirtNose);
     } else {
       let tex, fw, fh;
       if (T.atlas) {
         tex = sign > 0 ? yamanoteMats.face : yamanoteMats.faceBack;
         fw = ATLAS_REGIONS.face.w; fh = ATLAS_REGIONS.face.h;
-      } else if (T.k233Atlas && keihinMats.face) {
-        tex = sign > 0 ? keihinMats.face : keihinMats.faceBack;
+      } else if ((T.k233Atlas && keihinMats.face) || (T.band && T.mats.face)) {
+        const km = T.band ? T.mats : keihinMats;
+        tex = sign > 0 ? km.face : km.faceBack;
         fw = KEIHIN_FACE_W; fh = KEIHIN_FACE_H;
       } else {
         tex = T.face; fw = 256; fh = 256;
       }
-      const f = new THREE.Mesh(cabFaceGeoFor(fw, fh), new THREE.MeshBasicMaterial({ map: tex }));
-      f.position.set(0, 0, sign * (CAR_LEN / 2 + 0.03));
+      const f = new THREE.Mesh(cabFaceGeoFor(T.profile, fw, fh), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.45, metalness: 0.1 }));
+      f.position.set(0, 0, sign * (L / 2 + 0.03));
       if (sign < 0) f.rotation.y = Math.PI;
       car.add(f);
       // front skirt + coupler (one merged mesh)
       const fsc = new THREE.Mesh(cabGearGeo, darkMat);
-      fsc.position.z = sign * (CAR_LEN / 2);
+      fsc.position.z = sign * (L / 2);
       if (sign < 0) fsc.rotation.y = Math.PI;
       car.add(fsc);
     }
     // both marker lamps of a cab share one material → one draw call
     const lm = new THREE.MeshBasicMaterial({ color: 0xfff6d8 });
-    const lamps = new THREE.Mesh(lampPairGeo(isShink, !!T.e5Atlas), lm);
-    const lz = T.e5Atlas ? T.noseLen * 0.44 : isShink ? T.noseLen - 1.7 : 0.12;
-    lamps.position.z = sign * (CAR_LEN / 2 + lz);
+    const ls = lampSpec(typeKey);
+    const lamps = new THREE.Mesh(lampPairGeo(typeKey), lm);
+    const lz = ls.dz;
+    lamps.position.z = sign * (L / 2 + lz);
     car.add(lamps);
     (sign > 0 ? lampsPlus : lampsMinus).push(lm);
     // soft additive halo around the lamps (the glow you see at dusk)
     const halo = new THREE.Sprite(haloMatHead);
     halo.scale.setScalar(isShink ? 2.6 : 3.2);
-    halo.position.set(0, T.e5Atlas ? 3.42 : isShink ? 1.62 : 1.2, sign * (CAR_LEN / 2 + lz + 0.35));
+    halo.position.set(0, ls.y, sign * (L / 2 + lz + 0.35));
     car.add(halo);
     (sign > 0 ? halosPlus : halosMinus).push(halo);
   }
   addEnd(0, 1);
   addEnd(T.cars - 1, -1);
 
-  const len = T.cars * (CAR_LEN + CAR_GAP) - CAR_GAP;
+  const len = T.cars * (L + CAR_GAP) - CAR_GAP;
   return { group, cars, body, gangway, gwLocal, sideMatA, sideMatB, lampsPlus, lampsMinus,
-    halosPlus, halosMinus, len, type: T, typeKey, atlas: !!T.atlas };
+    halosPlus, halosMinus, len, carLen: L, type: T, typeKey, atlas: !!T.atlas };
 }
 
 // headlights face the direction of travel (terminals reverse out)
@@ -2469,8 +2826,8 @@ const DOOR_U = {
   // door centres along each side texture (u = 0..1 across the car side)
   yamanote: { A: [0.287, 0.582, 0.84], B: [0.159, 0.415, 0.686], w: 1.3 },
   keihin:   { A: [0.137, 0.395, 0.786], B: [0.12, 0.383, 0.786], w: 1.3 },
-  chuo:     { A: [0.113, 0.348, 0.582, 0.816], B: [0.113, 0.348, 0.582, 0.816], w: 1.3 },
-  ueno:     { A: [0.113, 0.348, 0.582, 0.816], B: [0.113, 0.348, 0.582, 0.816], w: 1.3 },
+  chuo:     { A: [0.137, 0.395, 0.786], B: [0.12, 0.383, 0.786], w: 1.3 },    // re-banded E233 sheet
+  ueno:     { A: [0.137, 0.395, 0.786], B: [0.12, 0.383, 0.786], w: 1.3 },
   tokaido:  { A: [0.06, 0.94], B: [0.06, 0.94], w: 0.9 },
   tohoku:   { A: [0.07, 0.922], B: [0.06, 0.906], w: 0.9 },
 };
@@ -2487,7 +2844,7 @@ const doorGapGeo = new THREE.PlaneGeometry(1, 1);
 function attachDoors(t) {
   const spec = DOOR_U[t.typeKey];
   const us = t.platSideLocal > 0 ? spec.A : spec.B;
-  const L = CAR_LEN, s = t.platSideLocal;
+  const L = t.carLen, s = t.platSideLocal;
   t.doorLocal = [];     // per door: [carIndex, localZ]
   for (let i = 0; i < t.cars.length; i++)
     for (const u of us) t.doorLocal.push([i, s > 0 ? L / 2 - u * L : -L / 2 + u * L]);
@@ -2496,7 +2853,10 @@ function attachDoors(t) {
   t.group.add(im);
   t.doorMesh = im;
   t.doorW = spec.w;
-  t.doorY = t.type.shink ? [1.15, 3.35] : [1.05, 3.55];
+  // doors run from the car floor (≈ platform level) up 1.85m
+  const { P, halfWAt } = profileOf(t.type.profile);
+  t.doorY = t.type.shink ? [1.8, 3.62] : [P.sillY + 0.1, P.sillY + 1.95];
+  t.doorX = halfWAt((t.doorY[0] + t.doorY[1]) / 2);
 }
 const _dm = new THREE.Matrix4(), _dq = new THREE.Quaternion(), _dp = new THREE.Vector3(), _ds = new THREE.Vector3();
 const _yAxis = new THREE.Vector3(0, 1, 0);
@@ -2512,7 +2872,7 @@ function updateDoorMesh(t, dt) {
   _dq.setFromAxisAngle(_yAxis, s > 0 ? Math.PI / 2 : -Math.PI / 2);
   const [y0, y1] = t.doorY;
   t.doorLocal.forEach(([ci, z], i) => {
-    _dp.set(s * (CAR_W / 2 + 0.03), (y0 + y1) / 2, z);
+    _dp.set(s * (t.doorX + 0.03), (y0 + y1) / 2, z);
     _ds.set(Math.max(0.001, t.doorW * e), y1 - y0, 1);
     _dm.compose(_dp, _dq, _ds).premultiply(t.cars[ci].matrix);
     im.setMatrixAt(i, _dm);
@@ -2523,7 +2883,7 @@ function updateDoorMesh(t, dt) {
 const _dw = new THREE.Vector3();
 function doorWorld(t, i, out, off = 0.6) {
   const [ci, z] = t.doorLocal[i];
-  out.set(t.platSideLocal * (CAR_W / 2 + off), 1.1, z).applyMatrix4(t.cars[ci].matrix);
+  out.set(t.platSideLocal * (t.doorX + off), PLAT_Y, z).applyMatrix4(t.cars[ci].matrix);
   return out;
 }
 
@@ -2593,7 +2953,7 @@ const crowd = (() => {
     const cx = camera.position.x, cz = camera.position.z;
     people.forEach((p, i) => {
       const moving = p.delay <= 0 && Math.hypot(p.tx - p.x, p.tz - p.z) > 0.05;
-      _o.position.set(p.x, DECK + 1.1 + 0.82 + (moving ? Math.abs(Math.sin(p.ph)) * 0.06 : 0), p.z);
+      _o.position.set(p.x, DECK + PLAT_Y + 0.82 + (moving ? Math.abs(Math.sin(p.ph)) * 0.06 : 0), p.z);
       _o.rotation.set(0, Math.atan2(cx - p.x, cz - p.z), 0);
       _o.updateMatrix();
       im.setMatrixAt(i, _o.matrix);
@@ -2623,7 +2983,7 @@ function placeCars(t) {
   // a little life: cars lean into the curves and shimmy at speed
   const sway = Math.min(1, t.speed / 25);
   for (let i = 0; i < n; i++) {
-    const s = t.sHead - CAR_LEN / 2 - i * (CAR_LEN + CAR_GAP);
+    const s = t.sHead - t.carLen / 2 - i * (t.carLen + CAR_GAP);
     t.route.posAt(s, _p);
     const car = t.cars[i];
     const yaw0 = car.rotation.y;
@@ -3266,8 +3626,8 @@ const sound = (() => {
    Day / Night
 ================================================================ */
 const dayTop = new THREE.Color(0x3d7ad6), dayBot = new THREE.Color(0xcfe4f7);
-const nightTop = new THREE.Color(0x050a18), nightBot = new THREE.Color(0x141d36);
-const dayFog = new THREE.Color(0xcfe4f7), nightFog = new THREE.Color(0x0a0f1d);
+const nightTop = new THREE.Color(0x060c20), nightBot = new THREE.Color(0x2a3150);
+const dayFog = new THREE.Color(0xcfe4f7), nightFog = new THREE.Color(0x1d2440);
 
 function updateDayNight(dt) {
   const target = isNight ? 1 : 0;
@@ -3277,22 +3637,25 @@ function updateDayNight(dt) {
   skyUniforms.bottomColor.value.copy(dayBot).lerp(nightBot, b);
   scene.fog.color.copy(dayFog).lerp(nightFog, b);
   // by night the "sun" becomes soft bluish moonlight so the yard still reads
-  sun.intensity = 2.0 * (1 - b) + 0.45 * b;
+  sun.intensity = 2.0 * (1 - b) + 0.6 * b;
   sun.color.copy(SUN_DAY).lerp(SUN_MOON, b);
   hemiLight.intensity = HEMI_DAY * (1 - b) + HEMI_NIGHT * b;
+  hemiLight.color.copy(HEMI_SKY_D).lerp(HEMI_SKY_N, b);
+  hemiLight.groundColor.copy(HEMI_GND_D).lerp(HEMI_GND_N, b);
   skyUniforms.sunGlow.value = 1 - b;
   skyUniforms.moonGlow.value = b;
-  const env = b > 0.5 ? envMaps.night : envMaps.day;
+  const env = envMaps.update(Math.round(b * 1000) / 1000);
   if (scene.environment !== env) scene.environment = env;
-  platLightMat.emissiveIntensity = b * 0.9;
+  stationU.uNight.value = b;
+  platLightMat.emissiveIntensity = b * 0.12;          // real light does the work now
   starMat.opacity = b * 0.9;
   moon.material.opacity = b;
-  renderer.toneMappingExposure = 1.0 - b * 0.2;
-  roofLightMat.emissiveIntensity = b * 1.8;
-  for (const m of station.userData.glowMats) m.emissiveIntensity = b * 1.4;
+  renderer.toneMappingExposure = 1.0 - b * 0.02;
+  roofLightMat.emissiveIntensity = b * 1.1;
+  for (const m of station.userData.glowMats) m.emissiveIntensity = b * 1.1;
   for (const m of cityMats) m.emissiveIntensity = b * 1.0;
   for (const m of trainGlowMats) m.emissiveIntensity = b * TRAIN_GLOW;
-  for (const m of haloMats) m.opacity = 0.1 + b * 0.8;
+  for (const m of haloMats) m.opacity = 0.08 + b * 0.5;
 }
 
 /* ================================================================
@@ -3473,7 +3836,7 @@ function shotPose(t, shot, P, T, A) {
     frameAt(t, t.sStop, _fb, 1);
     const [px, pz] = perp(_fb, t.platSideWorld);
     A.set(0, 0, 0);
-    P.set(_fb.x + _fb.fx * 7 + px * 2.3, DECK + 2.45, _fb.z + _fb.fz * 7 + pz * 2.3);
+    P.set(_fb.x + _fb.fx * 7 + px * 2.3, DECK + PLAT_Y + 1.35, _fb.z + _fb.fz * 7 + pz * 2.3);
     if (vis && t.state === 'enter') {
       frameAt(t, leadS(t), _fa);
       T.set(_fa.x, DECK + 2.1, _fa.z);
@@ -3506,7 +3869,7 @@ function shotPose(t, shot, P, T, A) {
     return;
   }
   if (shot === 'side') {
-    frameAt(t, ls - sg * CAR_LEN * 0.9, _fb);
+    frameAt(t, ls - sg * t.carLen * 0.9, _fb);
     const [px, pz] = perp(_fb, yardSide(_fb.x, _fb.z));
     // pacing alongside from a little above the canopies: trains on the
     // neighbouring tracks and platform pillars can't cut across the view
@@ -3516,10 +3879,10 @@ function shotPose(t, shot, P, T, A) {
     return;
   }
   // doors: from the platform, looking along the open doors to the cab
-  frameAt(t, ls - sg * CAR_LEN * 1.7, _fb);
+  frameAt(t, ls - sg * t.carLen * 1.7, _fb);
   const [px, pz] = perp(_fb, t.platSideWorld);
-  P.set(_fb.x + px * 3.0, DECK + 2.7, _fb.z + pz * 3.0);
-  T.set(_fa.x - _fa.fx * CAR_LEN * 0.35 - px * 0.6, DECK + 2.0, _fa.z - _fa.fz * CAR_LEN * 0.35 - pz * 0.6);
+  P.set(_fb.x + px * 3.0, DECK + PLAT_Y + 1.6, _fb.z + pz * 3.0);
+  T.set(_fa.x - _fa.fx * t.carLen * 0.35 - px * 0.6, DECK + 2.5, _fa.z - _fa.fz * t.carLen * 0.35 - pz * 0.6);
   if (k > 1) P.sub(T).multiplyScalar(1.15).add(T);
 }
 
@@ -3709,7 +4072,7 @@ function pickTrain(cx, cy) {
   const R = 46;
   for (const t of vis) {
     for (const car of t.cars) {
-      for (const dz of [-CAR_LEN * 0.42, 0, CAR_LEN * 0.42]) {
+      for (const dz of [-t.carLen * 0.42, 0, t.carLen * 0.42]) {
         _sp.set(0, 2.3, dz).applyMatrix4(car.matrix);
         _sq.copy(_sp).applyMatrix4(camera.matrixWorldInverse);
         if (_sq.z > -0.5) continue;                       // behind the camera
@@ -3966,6 +4329,13 @@ function setSound(on) {
 /* ---------- rendered train pictures for the dock ----------
    Each card shows the real model (photo textures and all) from a
    three-quarter front view, rendered once through the main renderer. */
+function layoutStraight(tr) {
+  const L = tr.carLen || CAR_LEN;
+  tr.cars.forEach((car, i) => { car.position.set(0, 0, -i * (L + CAR_GAP)); car.updateMatrix(); tr.body.setMatrixAt(i, car.matrix); });
+  tr.cars.slice(0, -1).forEach((car, i) => tr.gangway.setMatrixAt(i, _gw.multiplyMatrices(car.matrix, tr.gwLocal)));
+  tr.body.instanceMatrix.needsUpdate = true; tr.gangway.instanceMatrix.needsUpdate = true;
+  tr.body.computeBoundingSphere(); tr.gangway.computeBoundingSphere();
+}
 function renderThumbs() {
   const W = 168, H = 104;
   const ts = new THREE.Scene();
@@ -3986,13 +4356,11 @@ function renderThumbs() {
   renderer.shadowMap.enabled = false;
   for (const type of TYPE_ORDER) {
     const tr = buildTrain(type);
-    tr.cars.forEach((car, i) => { car.position.set(0, 0, -i * (CAR_LEN + CAR_GAP)); car.updateMatrix(); tr.body.setMatrixAt(i, car.matrix); });
-    tr.cars.slice(0, -1).forEach((car, i) => tr.gangway.setMatrixAt(i, _gw.multiplyMatrices(car.matrix, tr.gwLocal)));
-    tr.body.computeBoundingSphere(); tr.gangway.computeBoundingSphere();
+    layoutStraight(tr);
     tr.group.traverse(o => { if (o.isSprite) o.visible = false; });
     ts.add(tr.group);
     const nose = tr.type.shink ? tr.type.noseLen : 0;
-    const fz = CAR_LEN / 2 + nose;
+    const fz = tr.carLen / 2 + nose;
     tc.position.set(-7.5 - nose * 0.25, 3.4, fz + 9 + nose * 0.55);
     tc.lookAt(0, 2.2, fz - 7 - nose * 0.2);
     renderer.setRenderTarget(null);
@@ -4179,6 +4547,10 @@ const texturesReady = Promise.all([atlasData, e5Data, keihinData, keihinFaceData
       keihinMats.roof = makeRoofTex(k.image, RK.roof);
       keihinMats.side1Glow = makeWindowGlow(k.image, RK.side1, 0.2, 0.66);
       keihinMats.side2Glow = makeWindowGlow(k.image, RK.side2, 0.2, 0.66);
+      for (const T of [trainTypes.chuo, trainTypes.ueno]) {
+        T.mats.side1 = recolorBand(k.image, RK.side1, ...T.band);
+        T.mats.side2 = recolorBand(k.image, RK.side2, ...T.band);
+      }
     }
     if (kf) {
       // the dedicated full-front texture (whole cab, not just the glass)
@@ -4187,6 +4559,11 @@ const texturesReady = Promise.all([atlasData, e5Data, keihinData, keihinFaceData
       back.wrapS = THREE.RepeatWrapping;
       back.repeat.x = -1; back.offset.x = 1;
       keihinMats.faceBack = back;
+      for (const T of [trainTypes.chuo, trainTypes.ueno]) {
+        const f = recolorBand(kf.image, { x: 0, y: 0, w: kf.image.width, h: kf.image.height }, ...T.band);
+        const fb = f.clone(); fb.wrapS = THREE.RepeatWrapping; fb.repeat.x = -1; fb.offset.x = 1;
+        T.mats.face = f; T.mats.faceBack = fb;
+      }
     }
     rebuildAllTrains();
   });
@@ -4243,7 +4620,7 @@ new THREE.TextureLoader().load(
     bb.userData.cx = p.x + bendFor(p.bw, z) + xOff;
     bb.userData.cz = z;
     // bottom of the (leg-cut) cutout sits right on the platform surface
-    bb.position.set(bb.userData.cx, DECK + 1.1 + H / 2, z);
+    bb.position.set(bb.userData.cx, DECK + PLAT_Y + H / 2, z);
     bb.userData.y0 = bb.position.y; bb.userData.wave = 0;
     bb.castShadow = false;
     scene.add(bb);
@@ -4402,6 +4779,11 @@ if (/[?&]debug\b/.test(location.search)) window.__sim = {
   },
   get now() { return simNow; },
   rig, selectType, departPress, pickTrain, onTap, boarded, blocks,
+  buildTrain, layoutStraight, envMaps, CAR_GAP, DECK,
+  setNight(v) { isNight = v; nightBlend = v ? 1 : 0; },
+  set night(v) { isNight = v; },
+  get nightBlend() { return nightBlend; },
+  dayNight(dt) { updateDayNight(dt); },
 };
 
 function onResize() {
