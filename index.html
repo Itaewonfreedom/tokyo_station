@@ -2576,15 +2576,20 @@ const SHINK = {
   e5: {
     lead: 26.5, noseLen: 15, bogies: [7.4, 26.5 - 3.75], cabEye: [12.4, 3.62],
     body: { zb: 0.86, wBot: 1.02, yW: 2.42, wMax: 1.675, nB: 2.6, zt: 4.18, nT: 3.1, mT: 3.2, can: 0, cw: 0.8, wing: 0 },
+    /* E5 (from the side/top/front photos): a broad, spatula-shaped
+       duckbill whose tip rides at coupler height (≈0.9m above the rail),
+       its underside sweeping up to it; a long, gently convex top line;
+       the cockpit canopy rises out of the crown as one smooth hump —
+       no trough around it. */
     keys: [
-      [0.0,  { zb: 1.00, wBot: 0.16, yW: 1.13, wMax: 0.30, nB: 2.0, zt: 1.30, nT: 2.0, mT: 2.0 }],   // coupler-cover tip
-      [0.7,  { zb: 0.91, wBot: 0.46, yW: 1.13, wMax: 0.80, nB: 2.2, zt: 1.47, nT: 2.2, mT: 2.0 }],
-      [2.6,  { zb: 0.87, wBot: 0.80, yW: 1.16, wMax: 1.22, nB: 2.5, zt: 1.70, nT: 2.7, mT: 2.2 }],   // flat duckbill
-      [5.2,  { zb: 0.85, wBot: 0.95, yW: 1.26, wMax: 1.48, nB: 2.6, zt: 2.00, nT: 3.1, mT: 2.4 }],
-      [8.0,  { zb: 0.85, wBot: 1.00, yW: 1.50, wMax: 1.62, zt: 2.40, nT: 3.1, mT: 2.6, can: 0.06, cw: 0.62 }],  // cab front
-      [10.2, { yW: 1.76, wMax: 1.665, zt: 2.78, mT: 2.8, can: 0.44, cw: 0.86 }],
-      [12.6, { yW: 2.06, zt: 3.30, mT: 3.0, can: 0.52, cw: 0.96 }],                               // cab
-      [15.2, { yW: 2.34, zt: 3.96, can: 0.16, cw: 1.1 }],
+      [0.0,  { zb: 1.36, wBot: 0.58, yW: 1.47, wMax: 0.84, nB: 2.0, zt: 1.62, nT: 2.1, mT: 2.0 }],   // tip (coupler cover)
+      [0.8,  { zb: 1.21, wBot: 0.72, yW: 1.45, wMax: 1.06, nB: 2.2, zt: 1.79, nT: 2.4, mT: 2.1 }],
+      [2.6,  { zb: 1.04, wBot: 0.86, yW: 1.46, wMax: 1.29, nB: 2.4, zt: 2.02, nT: 2.8, mT: 2.2 }],   // duckbill
+      [5.2,  { zb: 0.93, wBot: 0.97, yW: 1.52, wMax: 1.50, nB: 2.6, zt: 2.30, nT: 3.0, mT: 2.4 }],   // mid nose
+      [8.0,  { zb: 0.87, wBot: 1.00, yW: 1.68, wMax: 1.62, zt: 2.64, nT: 3.1, mT: 2.6, can: 0.06, cw: 0.95 }],  // cab front
+      [10.2, { yW: 1.88, wMax: 1.665, zt: 3.00, mT: 2.8, can: 0.33, cw: 1.02 }],
+      [12.6, { yW: 2.13, zt: 3.44, mT: 3.0, can: 0.38, cw: 1.08 }],                               // cab
+      [15.2, { yW: 2.37, zt: 3.99, can: 0.1, cw: 1.2 }],                                         // shoulder into cabin
       [17.5, {}],                                                                                  // cabin
     ],
     wind: { s0: 9.9, s1: 12.5, w0: 0.34, w1: 0.64, down: 0.36 },
@@ -2593,13 +2598,16 @@ const SHINK = {
   n700: {
     lead: 27.35, noseLen: 10.7, bogies: [6.2, 27.35 - 3.75], cabEye: [8.3, 3.55],
     body: { zb: 0.82, wBot: 1.08, yW: 2.34, wMax: 1.68, nB: 2.2, zt: 4.13, nT: 2.6, mT: 2.4, can: 0, cw: 0.6, wing: 0 },
+    /* N700: a wide, flat nose tip at coupler height, the "aero double
+       wing" ridges swelling from the headlights up to the cab sides, a
+       short steep rise to a cab set high on the crown. */
     keys: [
-      [0.0,  { zb: 0.99, wBot: 0.22, yW: 1.10, wMax: 0.38, nB: 2.0, zt: 1.28, nT: 2.0, mT: 2.0, wing: 0 }],
-      [0.6,  { zb: 0.90, wBot: 0.58, yW: 1.10, wMax: 0.96, nB: 2.1, zt: 1.42, nT: 2.2, mT: 1.9, wing: 0.03 }],
-      [2.0,  { zb: 0.85, wBot: 0.86, yW: 1.15, wMax: 1.38, nB: 2.2, zt: 1.60, nT: 2.6, mT: 1.9, wing: 0.13 }],
-      [4.0,  { zb: 0.83, wBot: 1.00, yW: 1.26, wMax: 1.58, zt: 1.92, nT: 2.6, mT: 2.0, wing: 0.24 }],   // double wing
-      [6.1,  { zb: 0.82, yW: 1.52, wMax: 1.66, zt: 2.42, mT: 2.1, wing: 0.27, can: 0.08, cw: 0.52 }],  // cab front
-      [8.2,  { yW: 1.88, wMax: 1.68, zt: 3.22, mT: 2.3, wing: 0.13, can: 0.16, cw: 0.6 }],           // cab
+      [0.0,  { zb: 1.31, wBot: 0.62, yW: 1.43, wMax: 0.88, nB: 2.0, zt: 1.57, nT: 2.0, mT: 2.0, wing: 0 }],
+      [0.6,  { zb: 1.17, wBot: 0.80, yW: 1.41, wMax: 1.14, nB: 2.1, zt: 1.69, nT: 2.2, mT: 1.9, wing: 0.03 }],
+      [2.0,  { zb: 1.01, wBot: 0.93, yW: 1.43, wMax: 1.45, nB: 2.2, zt: 1.88, nT: 2.6, mT: 1.9, wing: 0.12 }],
+      [4.0,  { zb: 0.90, wBot: 1.03, yW: 1.52, wMax: 1.61, zt: 2.16, nT: 2.6, mT: 2.0, wing: 0.22 }],   // double wing
+      [6.1,  { zb: 0.84, yW: 1.68, wMax: 1.67, zt: 2.62, mT: 2.1, wing: 0.25, can: 0.08, cw: 0.72 }],  // cab front
+      [8.2,  { yW: 1.95, wMax: 1.68, zt: 3.30, mT: 2.3, wing: 0.12, can: 0.14, cw: 0.78 }],           // cab
       [10.7, { yW: 2.30, zt: 4.05, wing: 0.0, can: 0.0 }],
       [12.0, {}],
     ],
@@ -2643,7 +2651,7 @@ function sectionAt(type, s) {
   }
   return out;
 }
-const NB = 8, NT = 18;           // points on the lower / upper curve
+const NB = 8, NT = 26;           // points on the lower / upper curve
 // right half of a section, belly centre → crown centre; phi-tagged
 function sectionHalf(Q) {
   const pts = [[0, Q.zb, -1]];
@@ -2658,7 +2666,9 @@ function sectionHalf(Q) {
     let y = Q.yW + (Q.zt - Q.yW) * Math.sin(f) ** (2 / Q.mT);
     const up = Math.sin(f) ** 0.5;
     const r = x / Q.cw;
-    if (Q.can > 0 && r < 1) y += Q.can * (1 - r * r) ** 2 * up;              // cockpit canopy, part of the shell
+    // cockpit canopy, part of the shell: a wide Gaussian hump — its flanks
+    // run out into the shoulders instead of leaving a trough beside it
+    if (Q.can > 0) y += Q.can * Math.exp(-2.4 * r * r) * up;
     if (Q.wing > 0) y += Q.wing * Math.exp(-((((x / Q.wMax) - 0.6) / 0.17) ** 2)) * up;   // N700 wings
     pts.push([x, y, k / NT]);
   }
@@ -2671,7 +2681,7 @@ function sectionRing(Q) {
 // the intermediate car profile is the SAME cabin section → no mismatch
 function shinkProfile(type) {
   const h = sectionHalf(SHINK[type].body);
-  const split = NB + 2 + 9;                       // side strip up to ~the roof shoulder
+  const split = NB + 2 + 13;                      // side strip up to ~the roof shoulder
   return { side: h.slice(1, split).map(([x, y]) => [x, y]), roof: h.slice(split - 1).map(([x, y]) => [x, y]), bottomY: h[0][1] };
 }
 
@@ -2694,16 +2704,22 @@ function leadGeo(type) {
   const rings = st.map(s => sectionRing(sectionAt(type, s)));
   N = rings[0].length;
   // rounded tip: the first ring closes over a quarter circle
-  const tipR = 0.2, first = rings[0];
+  // the nose tip closes over an ELLIPTIC cap: long in plan (≈ its half
+  // width, a spatula, not a nub), short in height. The whole loft is
+  // fitted so the cap ends exactly at the car end (z = +L/2): the lead
+  // car stays exactly S.lead long.
+  const first = rings[0];
   const cy = first.reduce((a, p) => a + p[1], 0) / N;
+  const tipR = Math.max(...first.map(([x]) => Math.abs(x))) * 0.9;
   const tipRings = [];
-  for (let q = 4; q >= 1; q--) {
-    const th = q / 4 * Math.PI / 2, sc = Math.cos(th), dz = tipR * Math.sin(th);
-    tipRings.push([-dz, first.map(([x, y, f]) => [x * sc, cy + (y - cy) * sc, f])]);
+  for (let q = 5; q >= 1; q--) {
+    const th = q / 5 * Math.PI / 2, sx = Math.cos(th), sy = Math.cos(th) ** 0.7, dz = tipR * Math.sin(th);
+    tipRings.push([-dz, first.map(([x, y, f]) => [x * sx, cy + (y - cy) * sy, f])]);
   }
   const all = [...tipRings, ...st.map((s, i) => [s, rings[i]])];
+  const zOf = s => L / 2 - tipR - s * (L - tipR) / L;
   for (const [s, ring] of all)
-    ring.forEach(([x, y], k) => { pos.push(x, y, L / 2 - s); uv.push(k / (N - 1), Math.max(0, s) / L); });
+    ring.forEach(([x, y], k) => { pos.push(x, y, zOf(s)); uv.push(k / (N - 1), Math.max(0, s) / L); });
   for (let i = 0; i < all.length - 1; i++)
     for (let k = 0; k < N - 1; k++) {
       const a = i * N + k, b = a + N;
@@ -2729,6 +2745,147 @@ function leadGeo(type) {
    albedo, a roughness(G)+metalness(B) map (glass is glossy, paint semi,
    skirt matte), a bump map for panel seams, and a mask (R = lamp lens,
    G = passenger-window glow) for the lamp/night shader. */
+/* ---------- one livery for the whole trainset ----------
+   Heights are real model heights (deck coordinates, rail head 0.53),
+   derived from the intermediate car's side strip — whose texture v runs
+   along the curved side of the section — so paint lines line up across
+   the car gap regardless of UVs. */
+const sideGeomCache = {};
+function sideGeom(type) {
+  if (sideGeomCache[type]) return sideGeomCache[type];
+  const sp = shinkProfile(type);
+  const side = sp.side, roof = sp.roof;
+  const roofArc = [...roof, ...roof.slice(0, -1).reverse().map(([x, y]) => [-x, y])];
+  const sAl = arcLens(side), rAl = arcLens(roofArc);
+  const proj = (pts, al, x, y) => {       // arc length of the nearest point on a polyline
+    let best = 1e9, arc = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const [x0, y0] = pts[i], [x1, y1] = pts[i + 1], dx = x1 - x0, dy = y1 - y0;
+      const t = Math.max(0, Math.min(1, ((x - x0) * dx + (y - y0) * dy) / (dx * dx + dy * dy || 1)));
+      const d = Math.hypot(x0 + dx * t - x, y0 + dy * t - y);
+      if (d < best) { best = d; arc = al[i] + (al[i + 1] - al[i]) * t; }
+    }
+    return arc;
+  };
+  const yAtV = v => {                     // side strip v (0 sill → 1 top) → height
+    const d = v * sAl[sAl.length - 1];
+    let i = 1; while (i < sAl.length - 1 && sAl[i] < d) i++;
+    const f = (d - sAl[i - 1]) / (sAl[i] - sAl[i - 1] || 1);
+    return side[i - 1][1] + (side[i][1] - side[i - 1][1]) * f;
+  };
+  return (sideGeomCache[type] = {
+    side, roofArc, topY: side[side.length - 1][1], sillX: side[0][0], sillY: side[0][1],
+    sideV: (x, y) => proj(side, sAl, Math.abs(x), y) / sAl[sAl.length - 1],
+    roofU: (x, y) => proj(roofArc, rAl, x, y) / rAl[rAl.length - 1],
+    yAtV,
+  });
+}
+
+/* E5: the photo atlas of the intermediate car is the reference. Its row
+   profile (206px strip) gives pink 95–104, windows 63–88, white 106–158,
+   skirt 160+; converted to heights on the model that is pink 2.21–2.36,
+   windows 2.48–2.88, white/skirt split 1.30. The lead car's cabin samples
+   the atlas directly (same heights, same pixels); the nose is painted in
+   the atlas's own colours, its lines flowing down the nose and landing
+   exactly on those heights at the cabin. */
+const e5Ref = { side1: null, side2: null, roof: null, pal: null };
+function setE5Ref(img, roofCanvas) {
+  const grab = (R) => {
+    const c = document.createElement('canvas'); c.width = R.w; c.height = R.h;
+    const g = c.getContext('2d'); g.drawImage(img, R.x, R.y, R.w, R.h, 0, 0, R.w, R.h);
+    return g.getImageData(0, 0, R.w, R.h);
+  };
+  e5Ref.side1 = grab(E5_REGIONS.side1); e5Ref.side2 = grab(E5_REGIONS.side2);
+  e5Ref.roof = roofCanvas.getContext('2d').getImageData(0, 0, roofCanvas.width, roofCanvas.height);
+  // palette: averaged from the side strip, classified like the row profile
+  const d = e5Ref.side1.data, W = e5Ref.side1.width;
+  const avg = (r0, r1, test) => {
+    let n = 0; const a = [0, 0, 0];
+    for (let y = r0; y < r1; y++) for (let x = 0; x < W; x += 3) {
+      const o = (y * W + x) * 4, p = [d[o], d[o + 1], d[o + 2]];
+      if (test(p)) { a[0] += p[0]; a[1] += p[1]; a[2] += p[2]; n++; }
+    }
+    return n ? a.map(v => v / n) : null;
+  };
+  const rd = e5Ref.roof.data;
+  let rn = 0; const ra = [0, 0, 0];
+  for (let o = 0; o < rd.length; o += 64) if (rd[o + 1] > 90 && rd[o] < 120) { ra[0] += rd[o]; ra[1] += rd[o + 1]; ra[2] += rd[o + 2]; rn++; }
+  e5Ref.pal = {
+    teal: avg(24, 60, p => p[1] > 110 && p[0] < 110) || [40, 136, 143],
+    crown: rn ? ra.map(v => v / rn) : [44, 150, 154],
+    pink: avg(96, 103, p => p[0] > 170 && p[1] < 130) || [211, 91, 160],
+    white: avg(108, 150, p => p[0] > 180) || [216, 216, 220],
+    skirtHi: avg(160, 172, () => true) || [175, 175, 177],
+    skirtLo: avg(186, 204, () => true) || [88, 87, 84],
+  };
+}
+const E5_ATLAS = { h: 206, pink: [95, 104], win: [63, 88], whiteBot: 159 };
+let E5_BAND = null;                               // the same, in model heights
+function e5Band() {
+  if (!E5_BAND) {
+    const G5 = sideGeom('e5'), yr = r => G5.yAtV(1 - r / E5_ATLAS.h);
+    E5_BAND = { pink: [yr(E5_ATLAS.pink[1]), yr(E5_ATLAS.pink[0])], skirt: yr(E5_ATLAS.whiteBot), win: [yr(E5_ATLAS.win[1]), yr(E5_ATLAS.win[0])] };
+  }
+  return E5_BAND;
+}
+
+/* N700: the lead car's cabin defines the livery; the same rule paints
+   both the lead car and the intermediate cars (their own window / door
+   layout, no stretched nose skin). */
+const N700_LIV = {
+  white: [243, 245, 247], blue: [11, 58, 150], skirt: [206, 210, 214], under: [52, 55, 60],
+  glass: [27, 33, 39], seam: [138, 144, 150],
+  band: [2.16, 2.31], thin: [2.06, 2.095], win: [2.40, 2.92], winW: 0.62, winR: 0.1, pitch: 1.04,
+  doorD: 1.5, doorW: 1.0, doorY: [1.8, 3.62], doorWin: [2.52, 2.92], skirtY: 1.02,
+};
+function roundRectIn(u, v, w, h, r) {           // point in a rounded rect centred at 0
+  const ax = Math.abs(u) - (w / 2 - r), ay = Math.abs(v) - (h / 2 - r);
+  if (ax > r || ay > r) return false;
+  return ax <= 0 || ay <= 0 || ax * ax + ay * ay <= r * r;
+}
+// paint the N700 cabin at height y on the side; d = distance from the
+// car end whose door is at doorD, winFrom/winTo = window run along d
+function n700Cabin(y, d, winFrom, winTo, carLen) {
+  const V = N700_LIV;
+  let c = V.white, rough = 0.35, metal = 0.12, glow = 0, bump = 128;
+  if (y > V.band[0] && y < V.band[1]) c = V.blue;
+  if (y > V.thin[0] && y < V.thin[1]) c = V.blue;
+  if (y < V.skirtY) { c = V.skirt; rough = 0.7; metal = 0.02; }
+  // doors at both ends of a car (lead car: only at its coupled end)
+  for (const dc of carLen ? [V.doorD, carLen - V.doorD] : [V.doorD]) {
+    const du = d - dc;
+    if (Math.abs(Math.abs(du) - V.doorW / 2) < 0.018 && y > V.doorY[0] && y < V.doorY[1]) { c = V.seam; bump = 90; }
+    if (roundRectIn(du, y - (V.doorWin[0] + V.doorWin[1]) / 2, 0.3, V.doorWin[1] - V.doorWin[0], 0.06)) { c = V.glass; rough = 0.08; metal = 0.6; glow = 255; }
+  }
+  if (d > winFrom && d < winTo) {
+    const k = Math.round((d - winFrom - V.winW / 2) / V.pitch), cx = winFrom + V.winW / 2 + k * V.pitch;
+    if (cx + V.winW / 2 <= winTo + 0.01 && roundRectIn(d - cx, y - (V.win[0] + V.win[1]) / 2, V.winW, V.win[1] - V.win[0], V.winR)) {
+      c = V.glass; rough = 0.08; metal = 0.6; glow = 255;
+    }
+  }
+  return { c, rough, metal, glow, bump };
+}
+// the intermediate cars' side texture, painted from the same rule
+function n700CarTextures() {
+  const W = 1024, H = 256, L = 25, G = sideGeom('n700');
+  const cA = document.createElement('canvas'), cR = document.createElement('canvas'), cM = document.createElement('canvas');
+  for (const c of [cA, cR, cM]) { c.width = W; c.height = H; }
+  const iA = new ImageData(W, H), iR = new ImageData(W, H), iM = new ImageData(W, H);
+  const first = 2.9, n = Math.floor((L - 2 * first - N700_LIV.winW) / N700_LIV.pitch) + 1;
+  const run = (n - 1) * N700_LIV.pitch + N700_LIV.winW, w0 = (L - run) / 2;
+  for (let row = 0; row < H; row++) {
+    const y = G.yAtV(1 - (row + 0.5) / H);
+    for (let col = 0; col < W; col++) {
+      const d = (col + 0.5) / W * L;
+      const P = n700Cabin(y, d, w0, w0 + run, L), o = (row * W + col) * 4;
+      iA.data.set([...P.c, 255], o); iR.data.set([0, P.rough * 255, P.metal * 255, 255], o); iM.data.set([P.glow, P.glow, P.glow, 255], o);
+    }
+  }
+  cA.getContext('2d').putImageData(iA, 0, 0); cR.getContext('2d').putImageData(iR, 0, 0); cM.getContext('2d').putImageData(iM, 0, 0);
+  const mk = (c, srgb) => { const t = new THREE.CanvasTexture(c); if (srgb) t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t; };
+  return { sideClosed: mk(cA, true), sideRM: mk(cR), sideGlow: mk(cM), n700Windows: [w0, w0 + run] };
+}
+
 const leadSkinCache = {};
 function leadSkin(type) {
   if (leadSkinCache[type]) return leadSkinCache[type];
@@ -2743,7 +2900,9 @@ function leadSkin(type) {
     ? { top: hex(0x1ca2a6), top2: hex(0x178c90), line: hex(0xff4fa3), low: hex(0xf6f7f8), skirt: hex(0xd6d9dc) }
     : { top: hex(0xf3f5f7), top2: hex(0xe9edf0), line: hex(0x0b3a96), low: hex(0xf3f5f7), skirt: hex(0xd4d8dc) };
   const glass = hex(0x0d1318), frame = hex(0x1a1f24), winC = hex(0x1b2127), doorSeam = hex(0x8a9096);
-  const body = S.body, noseEnd = S.noseLen;
+  const body = S.body, noseEnd = S.noseLen, G = sideGeom(type);
+  const cabinS = S.keys[S.keys.length - 1][0];        // first station with the full cabin section
+  const E5_BAND = type === 'e5' ? e5Band() : null;
   const mix = (a, b, k) => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
   const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
   for (let row = 0; row < H; row++) {
@@ -2755,22 +2914,33 @@ function leadSkin(type) {
       const x = ring[k][0] + (ring[k + 1][0] - ring[k][0]) * fr, y = ring[k][1] + (ring[k + 1][1] - ring[k][1]) * fr;
       const ax = Math.abs(x);
       // ---- livery
-      let col3, rough = 0.32, metal = type === 'e5' ? 0.35 : 0.12, bump = 128, lamp = 0, glow = 0;
+      let col3, rough = 0.35, metal = 0.15, bump = 128, lamp = 0, glow = 0;
+      // every paint line is placed relative to the section: at the cabin
+      // section it lands on the intermediate car's height, on the nose it
+      // follows the same fraction of the (lower, narrower) section
+      const hRel = (yBody) => Q.zb + (yBody - body.zb) / (body.yW - body.zb) * (Q.yW - Q.zb);
+      const thin = Math.max(0.4, Math.min(1, (Q.yW - Q.zb) / (body.yW - body.zb) * 1.25));
       if (type === 'e5') {
-        // teal/white boundary: follows the waist forward and sweeps down the nose flank
-        const yb = Math.min(2.93, Q.yW + 0.36 * (Q.zt - Q.yW)) - 0.02;
-        const pl = 0.1;
-        col3 = y > yb + pl ? mix(C.top2, C.top, sm(yb, topC, y)) : y > yb ? C.line : C.low;
-        if (y <= yb) metal = 0.05;
+        const Pl = e5Ref.pal || { teal: [40, 136, 143], crown: [44, 150, 154], pink: [211, 91, 160], white: [216, 216, 220], skirtHi: [175, 175, 177], skirtLo: [88, 87, 84] };
+        const pc = hRel((E5_BAND.pink[0] + E5_BAND.pink[1]) / 2), ph = (E5_BAND.pink[1] - E5_BAND.pink[0]) / 2 * thin;
+        const sk = hRel(E5_BAND.skirt);
+        if (y > pc + ph) col3 = mix(Pl.teal, Pl.crown, sm(Math.max(Q.yW, pc + ph + 0.3), topC, y));
+        else if (y > pc - ph) col3 = Pl.pink;
+        else if (y > sk) col3 = Pl.white;
+        else col3 = mix(Pl.skirtLo, Pl.skirtHi, sm(Q.zb, sk, y));
+        if (y > pc + ph) { rough = 0.33; metal = 0.18; }
+        if (y <= sk) { rough = 0.7; metal = 0.02; }
       } else {
-        col3 = C.low; metal = 0.1;
-        // blue stripe: under the windows on the body, sweeping down the nose
-        const ys = 2.16 + (Q.yW + 0.02 - 2.16) * (1 - sm(1.5, noseEnd + 2.5, s));
-        const fade = sm(1.2, 2.4, s);
-        if (y > ys && y < ys + 0.15 && fade > 0) col3 = mix(C.low, C.line, fade);
-        if (y > ys - 0.1 && y < ys - 0.065 && fade > 0 && s > noseEnd - 1) col3 = mix(C.low, C.line, fade);
+        const V = N700_LIV;
+        col3 = V.white; rough = 0.35; metal = 0.12;
+        // the blue band and the thin line under it follow the nose down
+        // and fade out just behind the headlights
+        const fade = sm(1.6, 3.2, s);
+        const b0 = hRel(V.band[0]), b1 = hRel(V.band[0]) + (V.band[1] - V.band[0]) * thin;
+        const t0 = hRel(V.thin[0]), t1 = t0 + (V.thin[1] - V.thin[0]) * thin;
+        if (fade > 0 && ((y > b0 && y < b1) || (y > t0 && y < t1 && s > 4))) col3 = mix(V.white, V.blue, fade);
+        if (y < hRel(V.skirtY)) { col3 = V.skirt; rough = 0.7; metal = 0.02; }
       }
-      if (y < Q.zb + 0.2) { col3 = C.skirt; rough = 0.7; metal = 0.02; }
       // ---- windscreen: glass is ONLY here, flush with the shell
       const Wd = S.wind;
       if (s > Wd.s0 && s < Wd.s1) {
@@ -2791,20 +2961,36 @@ function leadSkin(type) {
         const cellL = Lp.top ? 0.21 : 0.3, cx = (x - Lp.x0) / cellL;
         if (Math.abs(cx - Math.floor(cx) - 0.5) < 0.34) { lamp = 255; col3 = hex(0xe8ecf0); }
       }
-      // ---- cabin: passenger windows and the door near the coupled end
-      const onSide = ax > Q.wMax * 0.9 && y > 1.6 && y < 3.9;
-      if (onSide && s > noseEnd + 1.2) {
-        const winY = type === 'e5' ? [3.02, 3.34] : [2.4, 2.92];
-        const pitch = type === 'e5' ? 1.02 : 1.04, ww = type === 'e5' ? 0.42 : 0.62;
-        const doorS = L - 1.7;
-        if (Math.abs(s - doorS) < 0.55) {
-          if (Math.abs(Math.abs(s - doorS) - 0.52) < 0.02 && y > 1.8 && y < 3.62) { col3 = doorSeam; bump = 90; }
-          if (Math.abs(s - doorS) < 0.18 && y > 3.02 && y < 3.42) { col3 = winC; rough = 0.08; metal = 0.7; glow = 150; }
-        } else if (s < doorS - 1.1 && y > winY[0] && y < winY[1]) {
-          const u = ((s - noseEnd - 1.6) / pitch) % 1;
-          if (u > 0 && u < ww / pitch) { col3 = winC; rough = 0.08; metal = 0.7; glow = 255; }
+      // ---- cabin (section == intermediate car section from cabinS on)
+      const dEnd = L - s;                                  // distance from the coupled end
+      if (s > cabinS - 1 && y > G.sillY - 0.02) {
+        const k = sm(cabinS - 1, cabinS, s);
+        if (type === 'e5' && e5Ref.side1) {
+          // sample the intermediate car's photo at the SAME model height;
+          // +x side = strip A (u runs 1→0 toward the coupled end), -x = B
+          let px;
+          if (y <= G.topY + 0.005 && ax >= G.sillX - 0.02) {
+            const v = G.sideV(x, y), I = x >= 0 ? e5Ref.side1 : e5Ref.side2;
+            const u = x >= 0 ? 1 - dEnd / 25 : dEnd / 25;
+            const ix = Math.min(I.width - 1, Math.max(0, u * I.width | 0)), iy = Math.min(I.height - 1, Math.max(0, (1 - v) * I.height | 0));
+            const o = (iy * I.width + ix) * 4;
+            px = [I.data[o], I.data[o + 1], I.data[o + 2]];
+            // window glow exactly as makeWindowGlow does for the car
+            const lum = 0.3 * px[0] + 0.59 * px[1] + 0.11 * px[2], rf = iy / I.height;
+            if (rf >= 0.14 && rf <= 0.52) glow = Math.round(255 * Math.max(0, Math.min(1, (62 - lum) / 26)) * k);
+          } else if (y > G.topY) {
+            const I = e5Ref.roof, u = G.roofU(x, y), vv = dEnd / 25;
+            const ix = Math.min(I.width - 1, Math.max(0, u * I.width | 0)), iy = Math.min(I.height - 1, Math.max(0, (1 - vv) * I.height | 0));
+            const o = (iy * I.width + ix) * 4;
+            px = [I.data[o], I.data[o + 1], I.data[o + 2]];
+          }
+          if (px) { col3 = mix(col3, px, k); rough = rough + (0.35 - rough) * k; metal = metal + (0.15 - metal) * k; }
+        } else if (type === 'n700' && ax > G.sillX - 0.02 && y <= G.topY) {
+          const P = n700Cabin(y, dEnd, 2.9, L - (noseEnd + 1.6), 0);
+          col3 = mix(col3, P.c, k); rough = P.rough; metal = P.metal; glow = P.glow; bump = P.bump;
         }
       }
+      if (ax < G.sillX - 0.03 && y < body.zb + 0.02 && s > cabinS - 1) col3 = N700_LIV.under;
       // ---- panel seams: coupler cover, nose/cabin joint, lower access panels
       if (Math.abs(s - 1.35) < 0.018 && y < Q.zt - 0.05) { bump = 70; col3 = mix(col3, [60, 60, 60], 0.35); }
       if (Math.abs(s - (noseEnd + 0.6)) < 0.015) { bump = 80; col3 = mix(col3, [70, 70, 70], 0.25); }
@@ -2834,14 +3020,20 @@ function leadMaterial(type) {
     bumpMap: sk.bump, bumpScale: 0.6, emissiveMap: sk.mask, emissive: 0xffffff,
   });
   const uLamp = { value: new THREE.Color(0xfff6d8) };
+  // the same emitted colour the intermediate cars' windows give off:
+  // emissive 0xfff0d0 × their glow map (E5: makeWindowGlow's warm mask,
+  // N700: a white mask)
+  const glowCol = new THREE.Color(0xfff0d0);
+  if (type === 'e5') glowCol.multiply(new THREE.Color(0xffecc4));
   mat.userData.lamp = uLamp;
   mat.onBeforeCompile = shader => {
     patchStation(shader);
     shader.uniforms.uLamp = uLamp;
+    shader.uniforms.uGlowCol = { value: glowCol };
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform vec3 uLamp;')
+      .replace('#include <common>', '#include <common>\nuniform vec3 uLamp;\nuniform vec3 uGlowCol;')
       .replace('#include <emissivemap_fragment>',
-        'vec4 emM = texture2D(emissiveMap, vEmissiveMapUv);\n\ttotalEmissiveRadiance = uLamp * emM.r * 1.6 + vec3(1., .88, .66) * emM.g * uNight * 0.5;');
+        'vec4 emM = texture2D(emissiveMap, vEmissiveMapUv);\n\ttotalEmissiveRadiance = uLamp * emM.r * 1.6 + uGlowCol * emM.g * uNight * ' + TRAIN_GLOW.toFixed(2) + ';');
   };
   return mat;
 }
@@ -2897,7 +3089,7 @@ const trainTypes = {
   tokaido: {
     name: '도카이도 신칸센 N700', nameJa: '東海道新幹線 N700系',
     sideClosed: shinkansenSide(null, '#1565c0'),
-    face: null, profile: 'n700', roofColor: 0xe8ecef,
+    face: null, profile: 'n700', roofColor: 0xf3f5f7,
     cars: 6, maxSpeed: 32, dwell: 16, shink: true,
   },
   tohoku: {
@@ -2916,6 +3108,9 @@ for (const T of Object.values(trainTypes))
     T.sideGlow = makeWindowGlow(img, { x: 0, y: 0, w: img.width, h: img.height },
       T.shink ? 0.14 : 0.2, T.shink ? 0.36 : 0.55);
   }
+
+// N700 intermediate cars: painted from the lead car's cabin rule
+Object.assign(trainTypes.tokaido, n700CarTextures());
 
 /* ---------- geometry baking: every train is a handful of draw calls ----------
    A car used to be ~22 separate meshes (≈180 draw calls per 8-car set).
@@ -3054,8 +3249,9 @@ function leadGear(type) {
 // sides get a night-time window glow: the dark glazing band of the side
 // texture becomes an emissive mask (see makeWindowGlow)
 const trainGlowMats = [];
-function sideMaterial(map, rough, metal, glow) {
+function sideMaterial(map, rough, metal, glow, rm = null) {
   const m = new THREE.MeshStandardMaterial({ map, roughness: rough, metalness: metal });
+  if (rm) { m.roughnessMap = m.metalnessMap = rm; m.roughness = 1; m.metalness = 1; }
   if (glow) {
     m.emissiveMap = glow; m.emissive.setHex(0xfff0d0);
     m.emissiveIntensity = nightBlend * TRAIN_GLOW; trainGlowMats.push(m);
@@ -3079,7 +3275,7 @@ function buildTrain(typeKey) {
     acMat = new THREE.MeshStandardMaterial({ map: yamanoteMats.ac, roughness: 0.6 });
   } else if (T.e5Atlas && e5Mats.side1) {
     // E5 Hayabusa photo atlas
-    sideMatA = sideMaterial(e5Mats.side1, 0.35, 0.15, e5Mats.side1Glow);
+    sideMatA = sideMaterial(e5Mats.side1, 0.35, 0.15, e5Mats.side1Glow);   // lead-car cabin uses the same 0.35 / 0.15
     sideMatB = sideMaterial(e5Mats.side2, 0.35, 0.15, e5Mats.side2Glow);
     roofMat = new THREE.MeshStandardMaterial({ map: e5Mats.roof, roughness: 0.45 });
     acMat = roofCarMat;
@@ -3091,7 +3287,9 @@ function buildTrain(typeKey) {
     roofMat = new THREE.MeshStandardMaterial({ map: keihinMats.roof, roughness: 0.55 });
     acMat = roofCarMat;
   } else {
-    sideMatA = sideMatB = sideMaterial(T.sideClosed, 0.45, 0.25, T.sideGlow);
+    sideMatA = sideMatB = T.sideRM
+      ? sideMaterial(T.sideClosed, 0.35, 0.12, T.sideGlow, T.sideRM)
+      : sideMaterial(T.sideClosed, 0.45, 0.25, T.sideGlow);
     if (T.roofTex) roofMat = new THREE.MeshStandardMaterial({ map: T.roofTex, roughness: 0.5 });
     else if (T.roofColor) roofMat = new THREE.MeshStandardMaterial({ color: T.roofColor, roughness: 0.55 });
     else roofMat = roofCarMat;
@@ -3311,7 +3509,10 @@ function attachDoors(t) {
     const L = t.carLens[i];
     if (t.type.shink && (i === 0 || i === n - 1)) {
       // lead car: one passenger door, 1.7m from the coupled end (as painted)
-      const dz = L / 2 - 1.7;
+      // mesh side facing the platform (the rear lead car is turned round)
+      const meshSide = i === 0 ? s : -s;
+      const dEnd = t.type.profile === 'e5' ? (meshSide > 0 ? 25 * (1 - 0.922) : 25 * 0.06) : N700_LIV.doorD;
+      const dz = L / 2 - dEnd;
       t.doorLocal.push([i, i === 0 ? -dz : dz]);
       continue;
     }
@@ -5011,6 +5212,8 @@ const texturesReady = Promise.all([atlasData, e5Data, keihinData, keihinFaceData
       e5Mats.roof = makeRoofTex(e5.image, R5.roof);
       e5Mats.side1Glow = makeWindowGlow(e5.image, R5.side1, 0.14, 0.52);
       e5Mats.side2Glow = makeWindowGlow(e5.image, R5.side2, 0.14, 0.52);
+      setE5Ref(e5.image, e5Mats.roof.image);
+      delete leadSkinCache.e5;
     }
     if (k) {
       const RK = KEIHIN_REGIONS;
