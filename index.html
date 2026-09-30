@@ -1754,7 +1754,7 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null,
     // taper to a slim point over each platform's last 45m (the canopy
     // ends are sharper than the platforms, like the photo)
     const taper = z => 1 - 0.7 * smooth(Math.min(1, Math.max(0, (Math.abs(z - off) - (len / 2 - 45)) / 45)));
-    const roofTaper = z => 1 - 0.86 * smooth(Math.min(1, Math.max(0, (Math.abs(z - off) - (len / 2 - 55)) / 57)));
+    const roofTaper = z => 1 - 0.55 * smooth(Math.min(1, Math.max(0, (Math.abs(z - off) - (len / 2 - 22)) / 24)));
     const cx = z => platX(P, z);
     platBits.push(sweepProfile(cx, zP0, zP1, deckProfile, platMat, 0.25, taper, Y),
       sweepProfile(cx, zP0, zP1, [[-2.45, PLAT_Y + 0.015], [-2.15, PLAT_Y + 0.015]], yellowMat, 0.25, taper, Y),
