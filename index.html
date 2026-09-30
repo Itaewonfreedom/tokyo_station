@@ -314,17 +314,22 @@ const PLAT_Y = 1.62;  // platform top ≈ car floor (≈1.1m above the rail head
 const TRACK_OFF = 4.35;             // track centre ↔ island centre
 const UP_H = 9.4;                   // the Chuo upper deck above the main deck
 const SAT_MPP = 0.32, satX = px => -75.6 + (px - 205) * SAT_MPP, satZ = py => (py - 1010) * SAT_MPP;
-const CANOPY_PTS = [
-  [[680, 358], [720, 345], [800, 330], [880, 314], [960, 304], [1040, 298], [1120, 296], [1200, 294], [1240, 293]],
-  [[730, 405], [800, 394], [880, 390], [960, 381], [1040, 377], [1120, 370], [1200, 358], [1250, 352]],
-  [[590, 462], [720, 450], [800, 445], [880, 438], [960, 428], [1040, 423], [1120, 415], [1200, 400], [1280, 395], [1330, 392]],
-  [[590, 491], [720, 490], [800, 486], [880, 481], [960, 472], [1040, 465], [1120, 455], [1200, 441], [1280, 435], [1320, 432]],
-  [[510, 530], [640, 530], [800, 530], [880, 527], [960, 519], [1040, 509], [1120, 500], [1200, 489], [1280, 478], [1360, 470], [1440, 466]],
-  [[510, 568], [640, 570], [800, 570], [880, 568], [960, 566], [1040, 558], [1120, 548], [1200, 537], [1280, 530], [1360, 515], [1430, 509]],
-  [[515, 605], [640, 612], [800, 620], [880, 618], [960, 614], [1040, 613], [1120, 600], [1200, 590], [1280, 577], [1360, 566], [1440, 552]],
-  [[530, 700], [640, 688], [800, 670], [880, 668], [960, 660], [1040, 655], [1120, 644], [1200, 635], [1280, 623], [1360, 612], [1500, 590]],
-  [[540, 750], [640, 736], [800, 722], [880, 716], [960, 707], [1040, 700], [1120, 695], [1200, 684], [1280, 676], [1360, 662], [1510, 640]],
+// canopy centrelines traced on the photo: for every 3px row the roof's
+// two outline edges were found (strongest brightness edges near a rough
+// guess), and a robust least-squares quadratic x(y) fitted through the
+// centres (u = (y − 1000) / 500, photo pixels) — one smooth curve per roof
+const CANOPY_FIT = [
+  { co: [298.61, -45.43, 80.65], y0: 680, y1: 1240 },
+  { co: [386.75, -51.78, -23.93], y0: 730, y1: 1250 },
+  { co: [425.20, -56.71, -7.63], y0: 590, y1: 1330 },
+  { co: [470.10, -52.74, -22.64], y0: 590, y1: 1320 },
+  { co: [519.75, -40.11, -31.80], y0: 510, y1: 1440 },
+  { co: [566.06, -34.34, -39.86], y0: 510, y1: 1430 },
+  { co: [615.53, -38.10, -58.64], y0: 515, y1: 1440 },
+  { co: [657.00, -63.08, -6.93], y0: 530, y1: 1500 },
+  { co: [701.04, -55.83, 2.39], y0: 540, y1: 1510 },
 ];
+
 // islands (z extents from the photo): which canopy curve, and whether it's up top
 const PLATFORMS = [
   { c: 0, z0: satZ(680), z1: satZ(1240), up: true },   // 1・2 Chuo (upper deck)
@@ -343,42 +348,25 @@ for (const p of PLATFORMS) { p.len = p.z1 - p.z0; p.off = (p.z0 + p.z1) / 2; }
 const smooth = k => k * k * (3 - 2 * k);
 const lerp = (a, b, k) => a + (b - a) * k;
 
-// canopy centrelines: Catmull-Rom through the photo points, straight
-// beyond them, then tabulated every 2m and pushed apart where two
-// islands would come closer than one island pitch
-const CL_Z0 = -240, CL_STEP = 2, CL_N = 241, MIN_PITCH = 12.8;
-const _clTab = (() => {
-  const curves = CANOPY_PTS.map(pts => {
-    const P = pts.map(([py, px]) => [satZ(py), satX(px)]);
-    return z => {
-      const n = P.length;
-      if (z <= P[0][0]) { const s = (P[1][1] - P[0][1]) / (P[1][0] - P[0][0]); return P[0][1] + s * (z - P[0][0]) * 0.6; }
-      if (z >= P[n - 1][0]) { const s = (P[n - 1][1] - P[n - 2][1]) / (P[n - 1][0] - P[n - 2][0]); return P[n - 1][1] + s * (z - P[n - 1][0]) * 0.6; }
-      let i = 0; while (P[i + 1][0] < z) i++;
-      const p0 = P[Math.max(0, i - 1)], p1 = P[i], p2 = P[i + 1], p3 = P[Math.min(n - 1, i + 2)];
-      const t = (z - p1[0]) / (p2[0] - p1[0]), t2 = t * t, t3 = t2 * t;
-      const m1 = (p2[1] - p0[1]) / (p2[0] - p0[0]) * (p2[0] - p1[0]), m2 = (p3[1] - p1[1]) / (p3[0] - p1[0]) * (p2[0] - p1[0]);
-      return (2 * t3 - 3 * t2 + 1) * p1[1] + (t3 - 2 * t2 + t) * m1 + (-2 * t3 + 3 * t2) * p2[1] + (t3 - t2) * m2;
-    };
-  });
-  const T = curves.map(() => new Float32Array(CL_N));
-  for (let i = 0; i < CL_N; i++) {
-    const z = CL_Z0 + i * CL_STEP;
-    let prev = -1e9;
-    curves.forEach((f, c) => {
-      let x = f(z);
-      if (c === 0) x = Math.max(x, -46);        // keep the Chuo deck off the brick station
-      x = Math.max(x, prev + MIN_PITCH * (c === 1 ? 1.1 : 1));   // c1→c2 also clears the Chuo deck columns
-      T[c][i] = x; prev = x;
-    });
-  }
-  return T;
-})();
+// centreline of a canopy in scene metres: the fitted quadratic over the
+// traced length, continued as its tangent beyond it
 function canopyX(c, z) {
-  const f = Math.min(CL_N - 1.001, Math.max(0, (z - CL_Z0) / CL_STEP)), i = Math.floor(f);
-  return lerp(_clTab[c][i], _clTab[c][i + 1], f - i);
+  const F = CANOPY_FIT[c], y = z / SAT_MPP + 1010;
+  const ev = yy => { const u = (yy - 1000) / 500; return F.co[0] + u * (F.co[1] + u * F.co[2]); };
+  const d = yy => (F.co[1] + 2 * F.co[2] * (yy - 1000) / 500) / 500;
+  // past the roof ends the heading straightens out within ~30m, so
+  // neighbouring islands never converge before the throats take over
+  const Lp = 90, ext = t => Lp * (1 - Math.exp(-t / Lp));
+  let px;
+  if (y < F.y0) px = ev(F.y0) - d(F.y0) * ext(F.y0 - y);
+  else if (y > F.y1) px = ev(F.y1) + d(F.y1) * ext(y - F.y1);
+  else px = ev(y);
+  return satX(px);
 }
 const platX = (p, z) => canopyX(p.c, z);
+// platforms narrow to a point over their last 45m; the tracks close in with them
+const platTaper = (p, z) => 1 - 0.7 * smooth(Math.min(1, Math.max(0, (Math.abs(z - p.off) - (p.len / 2 - 45)) / 45)));
+const trackOff = (p, z) => 2.6 * platTaper(p, z) + 1.75;
 const platY = p => DECK + (p.up ? UP_H : 0);
 
 // station x, platform, side, type (T through / N terminal from north /
@@ -424,7 +412,7 @@ const chuoWest = z => smooth(Math.min(1, Math.max(0, (-z - 340) / 140)));
 
 function lineXAt(line, z) {
   const L = LINES[line];
-  const x = platX(PLATFORMS[L.p], z) + L.side * TRACK_OFF;
+  const P = PLATFORMS[L.p], x = platX(P, z) + L.side * trackOff(P, z);
   const north = z < 0, lane = north ? L.N : L.S;
   if (lane == null) return x;
   const tr = trunkOf(line);
@@ -1697,7 +1685,7 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null,
   // wide, shallow GABLE roofs high above the platform: like the photo
   // they cover their tracks too (only slim slits between neighbours);
   // the eaves ride above the catenary
-  const HW = 5.7, EAVE = PLAT_Y + 5.75, RIDGE = PLAT_Y + 6.35;
+  const HW = 7.2, EAVE = PLAT_Y + 5.75, RIDGE = PLAT_Y + 6.45;
   const archProfile = [
     [-HW, EAVE], [-HW * 0.5, (EAVE + RIDGE) / 2 + 0.08], [0, RIDGE],
     [HW * 0.5, (EAVE + RIDGE) / 2 + 0.08], [HW, EAVE],
@@ -1753,8 +1741,12 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null,
     const { len, off } = P, zP0 = off - len / 2, zP1 = off + len / 2, Y = platY(P);
     // taper to a slim point over each platform's last 45m (the canopy
     // ends are sharper than the platforms, like the photo)
-    const taper = z => 1 - 0.7 * smooth(Math.min(1, Math.max(0, (Math.abs(z - off) - (len / 2 - 45)) / 45)));
-    const roofTaper = z => 1 - 0.55 * smooth(Math.min(1, Math.max(0, (Math.abs(z - off) - (len / 2 - 22)) / 24)));
+    const taper = z => platTaper(P, z);
+    // roofs: as wide as HW, but always leaving ≥1m slits to the neighbours
+    const nb = PLATFORMS.filter(q => q !== P && !q.roofless && q.c !== P.c);
+    const room = z => { let m = 1e9; for (const q of nb) if (z > q.z0 - 10 && z < q.z1 + 10) m = Math.min(m, Math.abs(platX(q, z) - platX(P, z))); return m; };
+    const roofTaper0 = z => 1 - 0.55 * smooth(Math.min(1, Math.max(0, (Math.abs(z - off) - (len / 2 - 22)) / 24)));
+    const roofTaper = z => Math.min(roofTaper0(z), (room(z) / 2 - 0.4) / HW);
     const cx = z => platX(P, z);
     platBits.push(sweepProfile(cx, zP0, zP1, deckProfile, platMat, 0.25, taper, Y),
       sweepProfile(cx, zP0, zP1, [[-2.45, PLAT_Y + 0.015], [-2.15, PLAT_Y + 0.015]], yellowMat, 0.25, taper, Y),
@@ -6362,7 +6354,7 @@ function animate(now = performance.now()) {
 }
 animate();
 if (/[?&]debug\b/.test(location.search)) window.__sim = {
-  renderer, scene, camera, controls, trains, THREE, placeCars, setTravel, fadeables,
+  renderer, scene, camera, controls, trains, THREE, placeCars, setTravel, fadeables, LINES, lineSpan, lineXAt, trunkOf,
   get timeScale() { return timeScale; }, set timeScale(v) { timeScale = v; },
   simulate(sec) {        // run the dispatcher headless (tests)
     for (let k = 0; k < sec / 0.05; k++) { for (const t of trains) updateTrain(t, 0.05); sound.update(0.05); }
