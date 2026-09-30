@@ -266,10 +266,10 @@ const HEMI_SKY_D = new THREE.Color(0xbfd6ff), HEMI_SKY_N = new THREE.Color(0x7d9
 const HEMI_GND_D = new THREE.Color(0x6b6257), HEMI_GND_N = new THREE.Color(0x5a4638);
 let composer = null, bloomPass = null;   // night bloom (created on demand)
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.5, 1600);
-camera.position.set(-80, 45, 150);
+camera.position.set(-50, 46, 150);
 
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(0, 4, -10);
+controls.target.set(18, 4, -10);
 controls.enableDamping = true;
 controls.dampingFactor = 0.07;
 controls.maxPolarAngle = Math.PI * 0.495;
@@ -298,94 +298,142 @@ const DECK = 8.5;   // the whole yard rides a ~3-storey elevated viaduct
 const RAIL_Y = 0.53;  // rail head above the deck (car coordinates start at the deck)
 const PLAT_Y = 1.62;  // platform top ≈ car floor (≈1.1m above the rail head)
 
-/* Real Tokyo Station layout, west → east. In the station zone the
-   tracks SPREAD APART around each island platform (±3.4m from the
-   platform centreline) so the yard bulges into the lens shape seen in
-   the satellite photo, then sweeps back into slim corridors. A gentle
-   global S-bend curves the whole alignment so nothing is ruler-straight. */
-const LINES_X = {
-  CH1: -32.3, CH2: -23.6,                  // 中央線快速 (terminal, enters from N)
-  KA: -19.4, YA: -10.7, YB: -6.5, KB: 2.2, // 京浜東北 / 山手 loops (through)
-  UTN: 6.4, UTS: 15.1,                     // 上野東京ライン (through)
-  TKS1: 19.7, TKS2: 28.4, TKP: 37.1,       // 東海道新幹線 (terminal, enters from S)
-  THS1: 41.5, THS2: 50.2,                  // 東北新幹線 (terminal, enters from N)
+/* Real Tokyo Station layout after the satellite photo and the track
+   diagram, west (Marunouchi, x < 0) → east (Yaesu):
+     1・2 Chuo (terminal from the north, right beside the brick station)
+     3・4 Keihin-Tohoku / Yamanote, 5・6 Yamanote / Keihin-Tohoku,
+     7・8 Ueno-Tokyo Line, 9・10 Tokaido Line (terminal from the south),
+     20–23 Tohoku Shinkansen (2 islands, terminal from the north),
+     14–19 Tokaido Shinkansen (3 islands, terminal from the south).
+   The Marunouchi side runs straight; the further east, the more a line
+   bows out, so the Shinkansen platforms curve like in the photo. North
+   of the station everything swings north-east into a slim corridor;
+   to the south it sweeps south-west. Extra platform tracks run into
+   their group's main line in the throat (their blocks are shared). */
+// station x, bow weight, type (T through / N terminal from north / S
+// terminal from south), north & south corridor lane, merge-into line,
+// buffer z for terminal lines
+const LINES = {
+  CH1:  { x: -42.35, w: 0,    type: 'N', N: 0, buf: 88 },
+  CH2:  { x: -33.65, w: 0,    type: 'N', N: 1, buf: 88 },
+  KA:   { x: -29.45, w: 0.05, type: 'T', N: 2, S: 0 },
+  YA:   { x: -20.75, w: 0.05, type: 'T', N: 3, S: 1 },
+  YB:   { x: -16.55, w: 0.1,  type: 'T', N: 4, S: 2 },
+  KB:   { x: -7.85,  w: 0.1,  type: 'T', N: 5, S: 3 },
+  UTN:  { x: -3.65,  w: 0.18, type: 'T', N: 6, S: 4 },
+  UTS:  { x: 5.05,   w: 0.18, type: 'T', N: 7, S: 5 },
+  TLN:  { x: 9.25,   w: 0.26, type: 'S', S: 5, into: 'UTS', buf: -160 },
+  TLS:  { x: 17.95,  w: 0.26, type: 'S', S: 5, into: 'UTS', buf: -160 },
+  THS1: { x: 23.15,  w: 0.4,  type: 'N', N: 8, buf: 150 },
+  THS2: { x: 31.85,  w: 0.4,  type: 'N', N: 8, into: 'THS1', buf: 150 },
+  THS3: { x: 36.15,  w: 0.55, type: 'N', N: 9, buf: 150 },
+  THS4: { x: 44.85,  w: 0.55, type: 'N', N: 9, into: 'THS3', buf: 150 },
+  TKS1: { x: 50.15,  w: 0.7,  type: 'S', S: 6, buf: -160 },
+  TKS2: { x: 58.85,  w: 0.7,  type: 'S', S: 6, into: 'TKS1', buf: -160 },
+  TKS3: { x: 63.05,  w: 0.85, type: 'S', S: 6, into: 'TKS1', buf: -160 },
+  TKS4: { x: 71.75,  w: 0.85, type: 'S', S: 7, buf: -160 },
+  TKS5: { x: 75.95,  w: 1,    type: 'S', S: 7, into: 'TKS4', buf: -160 },
+  TKS6: { x: 84.65,  w: 1,    type: 'S', S: 7, into: 'TKS4', buf: -160 },
 };
+const LINE_DEFS = Object.fromEntries(Object.entries(LINES).map(([k, v]) => [k, v.type]));
+const LINES_X = Object.fromEntries(Object.entries(LINES).map(([k, v]) => [k, v.x]));
+const BOW_W = Object.fromEntries(Object.entries(LINES).map(([k, v]) => [k, v.w]));
+const trunkOf = l => LINES[l].into || l;
+// corridor lanes beyond the throats (4.2m track centres)
+const laneN = i => -10 + 4.2 * i;
+const laneS = i => -48 + 4.3 * i;
+// throat spans (|z| where a line starts to swing → where it is in its lane)
+const THROAT_N = { CH1: [112, 330], CH2: [112, 330] }, THROAT_N_DEF = [160, 345];
+const THROAT_S = { KA: [92, 320], YA: [92, 320], YB: [112, 320], KB: [112, 320] }, THROAT_S_DEF = [150, 330];
+// beyond the south throat the whole corridor keeps sweeping south-west
+const driftS = z => -40 * smooth(Math.min(1, Math.max(0, (z - 300) / 320)));
 
-// throat squeeze: beyond |z|=160 the lines sweep into slim corridors
-const SQ_Z0 = 160, SQ_Z1 = 380;
-const SQUEEZE = {
-  CH1: { N: -15.8, S: null }, CH2: { N: -11.4, S: null },
-  KA:  { N: -7.0,  S: -11.4 }, YA: { N: -2.6, S: -7.0 },
-  YB:  { N: 1.8,   S: -2.6 },  KB: { N: 6.2,  S: 1.8 },
-  UTN: { N: 10.6,  S: 6.2 },   UTS: { N: 15.0, S: 10.6 },
-  TKS1:{ N: null,  S: 15.0 },  TKS2:{ N: null, S: 19.4 },
-  THS1:{ N: 19.4,  S: null },  THS2:{ N: 23.8, S: null },
-};
-const LINE_DEFS = {
-  CH1: 'N', CH2: 'N',
-  KA: 'T', YA: 'T', YB: 'T', KB: 'T', UTN: 'T', UTS: 'T',
-  TKS1: 'S', TKS2: 'S', THS1: 'N', THS2: 'N',
-};
-const BUFFER_Z = 155;
-
-// island platforms like the satellite: different lengths, staggered
-// offsets (the roof ends fan diagonally), all curved with the bend
+// island platforms: centre x, length, z centre, bow weight (the same as
+// their two tracks, so the clearances are exact). Lengths and staggered
+// ends follow the photo.
 const PLATFORMS = [
-  { x: -27.95, len: 230, off: -14, bw: 1 },     // Chuo
-  { x: -15.05, len: 264, off: 0,   bw: 0.8 },   // Keihin/Yamanote
-  { x: -2.15,  len: 286, off: 6,   bw: 0.55 },  // Yamanote/Keihin
-  { x: 10.75,  len: 286, off: 12,  bw: 0.3 },   // Ueno-Tokyo
-  { x: 24.05,  len: 292, off: 4,   bw: 0.05 },  // Tokaido Shinkansen
-  { x: 32.75,  len: 292, off: -6,  bw: 0.05 },  // Tokaido Shinkansen
-  { x: 45.85,  len: 262, off: -18, bw: 0 },     // Tohoku Shinkansen
+  { x: -38.0, len: 180, off: -16,  bw: 0 },     // 1・2 Chuo
+  { x: -25.1, len: 176, off: -8,   bw: 0.05 },  // 3・4
+  { x: -12.2, len: 236, off: -16,  bw: 0.1 },   // 5・6
+  { x: 0.7,   len: 233, off: -17,  bw: 0.18 },  // 7・8
+  { x: 13.6,  len: 290, off: -6,   bw: 0.26 },  // 9・10
+  { x: 27.5,  len: 284, off: -8,   bw: 0.4 },   // 20・21
+  { x: 40.5,  len: 280, off: -9,   bw: 0.55 },  // 22・23
+  { x: 54.5,  len: 290, off: -6,   bw: 0.7 },   // 14・15
+  { x: 67.4,  len: 298, off: 1,    bw: 0.85 },  // 16・17
+  { x: 80.3,  len: 296, off: 3,    bw: 1 },     // 18・19
 ];
 
 const smooth = k => k * k * (3 - 2 * k);
 const lerp = (a, b, k) => a + (b - a) * k;
 
-/* global alignment — like the photo, the curvature is NOT uniform:
-   the Shinkansen side (east) runs straight, while the conventional
-   lines curve more and more strongly toward the Marunouchi (west)
-   side. Every line gets a per-group bow weight; tracks and platform
-   in one group share a weight so clearances are exact, and between
-   groups the gaps only widen mid-station (the yard splays). */
-const BEND_AMP = 22;
-const lean = z => BEND_AMP * (smooth((z + Z_END) / (2 * Z_END)) * 2 - 1);
-const bowRaw = z => Math.abs(z) <= 230 ? -(1 + Math.cos(Math.PI * z / 230)) * 5.5 : 0;
-const BOW_W = {
-  CH1: 1, CH2: 1,           // Chuo: hugs the curve, strongest bow
-  KA: 0.8, YA: 0.8,         // Keihin/Yamanote west pair
-  YB: 0.55, KB: 0.55,       // Yamanote/Keihin east pair
-  UTN: 0.3, UTS: 0.3,       // Ueno-Tokyo Line
-  TKS1: 0.05, TKS2: 0.05, TKP: 0.05,   // Tokaido Shinkansen: almost straight
-  THS1: 0, THS2: 0,         // Tohoku Shinkansen: dead straight
-};
-const bendFor = (w, z) => lean(z) + w * bowRaw(z);
+// the station bulge: nothing on the Marunouchi side, up to BOW_A at the
+// east edge, fading out past the platform ends
+const BOW_A = 18, BOW_L = 215;
+const bowRaw = z => Math.abs(z) < BOW_L ? BOW_A * 0.5 * (1 + Math.cos(Math.PI * z / BOW_L)) : 0;
+const bendFor = (w, z) => w * bowRaw(z);
 
-// x of a line at signed z (squeeze + weighted bend)
+// x of a line at signed z (station position + bow, then the throat)
 function lineXAt(line, z) {
-  let x = LINES_X[line];
-  const sq = SQUEEZE[line];
-  if (sq) {
-    const to = z < 0 ? sq.N : sq.S;
-    if (to != null) {
-      const az = Math.abs(z);
-      if (az >= SQ_Z1) x = to;
-      else if (az > SQ_Z0) x = lerp(x, to, smooth((az - SQ_Z0) / (SQ_Z1 - SQ_Z0)));
-    }
-  }
-  return x + bendFor(BOW_W[line], z);
+  const L = LINES[line];
+  let x = L.x + bendFor(L.w, z);
+  const north = z < 0, lane = north ? L.N : L.S;
+  if (lane == null) return x;
+  const T = LINES[trunkOf(line)];
+  const [z0, z1] = (north ? THROAT_N : THROAT_S)[trunkOf(line)] || (north ? THROAT_N_DEF : THROAT_S_DEF);
+  const target = north ? laneN(lane) : laneS(lane) + driftS(z);
+  const az = Math.abs(z);
+  if (az >= z1) return target;
+  if (az <= z0) return x;
+  return lerp(x, target, smooth((az - z0) / (z1 - z0)));
+}
+// where a merging line has fully joined its trunk (its own rails stop)
+function mergeZ(line) {
+  const L = LINES[line];
+  if (!L.into) return null;
+  const north = L.type === 'N';
+  const [, z1] = (north ? THROAT_N : THROAT_S)[trunkOf(line)] || (north ? THROAT_N_DEF : THROAT_S_DEF);
+  return north ? -z1 : z1;
+}
+// z range a line's own rails cover
+function lineSpan(line) {
+  const L = LINES[line], m = mergeZ(line);
+  if (L.type === 'T') return [-Z_END, Z_END];
+  if (L.type === 'N') return [m != null ? m : -Z_END, L.buf];
+  return [L.buf, m != null ? m : Z_END];
+}
+// the platform a line serves (nearest island at the station)
+function platformOf(line) {
+  let best = PLATFORMS[0], bd = 1e9;
+  for (const p of PLATFORMS) { const d = Math.abs(p.x - LINES[line].x); if (d < bd) { bd = d; best = p; } }
+  return best;
 }
 
-// outer edges of the rail corridor (drives ballast, gantries, city)
+// outer edges of the rail corridor (drives the viaduct, gantries, city):
+// the outermost lines present at z, tabulated every 2m
+const _edgeTab = (() => {
+  const n = Z_END + 1, L = new Float32Array(n), R = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const z = -Z_END + i * 2;
+    let lo = 1e9, hi = -1e9;
+    for (const l of Object.keys(LINES)) {
+      const [a, b] = lineSpan(l);
+      if (z < a - 24 || z > b + 24) continue;       // viaduct runs a little past a buffer
+      const x = lineXAt(l, Math.min(b, Math.max(a, z)));
+      lo = Math.min(lo, x); hi = Math.max(hi, x);
+    }
+    L[i] = lo - 3.2; R[i] = hi + 3.2;
+  }
+  // soften the steps where terminal tracks end
+  for (const A of [L, R]) for (let pass = 0; pass < 6; pass++)
+    for (let i = 1; i < n - 1; i++) A[i] = (A[i - 1] + 2 * A[i] + A[i + 1]) / 4;
+  return { L, R };
+})();
 function corridorEdges(z) {
-  if (z < 0)
-    return { left: lineXAt('CH1', z) - 3.2, right: lineXAt('THS2', z) + 3.2 };
-  // south of the station the Chuo & Tohoku-Shinkansen tracks are gone
-  const k = smooth(Math.min(1, Math.max(0, (z - 150) / 60)));
+  const f = Math.min(Z_END - 0.001, Math.max(0, (z + Z_END) / 2)), i = Math.floor(f), k = f - i;
   return {
-    left: lerp(lineXAt('CH1', z) - 3.2, lineXAt('KA', z) - 3.2, k),
-    right: lerp(lineXAt('THS2', z) + 3.2, lineXAt('TKS2', z) + 3.2, k),
+    left: lerp(_edgeTab.L[i], _edgeTab.L[i + 1], k),
+    right: lerp(_edgeTab.R[i], _edgeTab.R[i + 1], k),
   };
 }
 
@@ -421,7 +469,7 @@ function buildRoute(line, dir) {
     return ss[best];
   }
   return { posAt, sAtZ, S,
-    sStop: sAtZ(0),
+    sStop: sAtZ(platformOf(line).off),
     sEnterClear: sAtZ(dir > 0 ? -LADDER_CLEAR : LADDER_CLEAR) };
 }
 
@@ -892,7 +940,7 @@ const stationU = {
 const STATION_GLSL = `
 uniform float uNight;
 uniform float uDark;
-uniform vec4 uPlat[7];
+uniform vec4 uPlat[${PLATFORMS.length}];
 vec3 stationIrr(vec3 pv, vec3 nv) {
   if (uNight < 0.01) return vec3(0.);
   mat3 R = transpose(mat3(viewMatrix));
@@ -901,17 +949,15 @@ vec3 stationIrr(vec3 pv, vec3 nv) {
   if (abs(p.z) > 200. && p.y > 3.) return vec3(0.);
   vec3 n = normalize(R * nv);
   float z = p.z;
-  float k = clamp((z + ${Z_END.toFixed(1)}) / ${(2 * Z_END).toFixed(1)}, 0., 1.);
-  float lean = ${BEND_AMP.toFixed(1)} * (k * k * (3. - 2. * k) * 2. - 1.);
-  float bow = abs(z) <= 230. ? -(1. + cos(3.14159265 * z / 230.)) * 5.5 : 0.;
+  float bow = abs(z) < ${BOW_L.toFixed(1)} ? ${(BOW_A / 2).toFixed(2)} * (1. + cos(3.14159265 * z / ${BOW_L.toFixed(1)})) : 0.;
   float acc = 0.;
   float lampY = ${(DECK + PLAT_Y + 3.3).toFixed(2)};
   if (p.y < lampY + 0.35 && p.y > ${(DECK - 1).toFixed(1)}) {
-    for (int i = 0; i < 7; i++) {
+    for (int i = 0; i < ${PLATFORMS.length}; i++) {
       vec4 P = uPlat[i];
       float zin = 1. - smoothstep(P.w - 8., P.w + 3., abs(z - P.z));
       if (zin <= 0.) continue;
-      vec2 L = vec2(P.x + lean + P.y * bow - p.x, lampY - p.y);
+      vec2 L = vec2(P.x + P.y * bow - p.x, lampY - p.y);
       float d2 = dot(L, L);
       if (d2 > 130.) continue;
       vec2 l = L * inversesqrt(d2 + 1e-3);
@@ -1385,7 +1431,7 @@ function sweepBed(kind, xFn, z0, z1, prof, yOff, sleepers, uvScale) {
 const BED_PROF = [[-2.15, 0.05], [-1.62, 0.33], [1.62, 0.33], [2.15, 0.05]];
 const SLAB_BASE = [[-1.5, 0.05], [-1.42, 0.2], [1.42, 0.2], [1.5, 0.05]];
 const SLAB_TOP = [[-1.17, 0.2], [-1.17, 0.3], [1.17, 0.3], [1.17, 0.2]];
-const SLAB_LINES = new Set(['THS1', 'THS2']);
+const SLAB_LINES = new Set(['THS1', 'THS2', 'THS3', 'THS4']);
 
 function railStrips(xFn, z0, z1, off, prof, segLen) {
   const n = Math.max(2, Math.ceil((z1 - z0) / segLen));
@@ -1425,7 +1471,7 @@ function railPath(xFn, z0, z1, opts = {}) {
       const a = cuts[c], b = cuts[c + 1];
       if (b - a < 0.5) continue;
       const near = c === 1;
-      railStrips(xFn, a, b, off, near ? RAIL_NEAR : RAIL_FAR, near ? 4 : 10);
+      railStrips(xFn, a, b, off, near ? RAIL_NEAR : RAIL_FAR, near ? 6 : 12);
     }
   }
   // sleepers (ballast) or rail pads (slab), near the station only
@@ -1463,33 +1509,18 @@ function addBuffer(x, z) {
   railBits.push(b);
 }
 
-// lay every line according to its type
-for (const [l, type] of Object.entries(LINE_DEFS)) {
-  const xFn = z => lineXAt(l, z), o = { slab: SLAB_LINES.has(l) };
-  if (type === 'T') {
-    railPath(xFn, -Z_END, Z_END, o);
-  } else if (type === 'N') {        // ends at a buffer south of the platform
-    railPath(xFn, -Z_END, BUFFER_Z, o);
-    addBuffer(lineXAt(l, BUFFER_Z + 0.5), BUFFER_Z + 0.5);
-  } else {                          // 'S': ends at a buffer north of the platform
-    railPath(xFn, -BUFFER_Z, Z_END, o);
-    addBuffer(lineXAt(l, -BUFFER_Z - 0.5), -BUFFER_Z - 0.5);
-  }
+// lay every line over its own span; terminal tracks end at a buffer
+for (const l of Object.keys(LINES)) {
+  const L = LINES[l], [z0, z1] = lineSpan(l);
+  railPath(z => lineXAt(l, z), z0, z1, { slab: SLAB_LINES.has(l), under: !!L.into });
+  if (L.type === 'N') addBuffer(lineXAt(l, L.buf + 0.5), L.buf + 0.5);
+  if (L.type === 'S') addBuffer(lineXAt(l, L.buf - 0.5), L.buf - 0.5);
 }
-// Shinkansen storage track (stub siding with buffers at both ends)
-{
-  const xFn = z => LINES_X.TKP + bendFor(BOW_W.TKP, z);
-  railPath(xFn, -BUFFER_Z, 115);
-  addBuffer(xFn(-BUFFER_Z - 0.5), -BUFFER_Z - 0.5);
-  addBuffer(xFn(115.5), 115.5);
-}
-// decorative scissors crossovers just beyond each platform's ends
-crossRails('KA', 'YA', 136, 156, -1);
+// decorative scissors crossovers just beyond the through platforms' ends
+crossRails('KA', 'YA', 100, 118, -1);
 crossRails('YB', 'KB', 140, 158, -1);
-crossRails('UTN', 'UTS', 134, 156, -1);
-crossRails('TKS1', 'TKS2', 144, 154, -1);
-crossRails('THS1', 'THS2', 117, 137, 1);
-crossRails('CH1', 'CH2', 104, 124, 1);
+crossRails('UTN', 'UTS', 140, 158, -1);
+crossRails('CH1', 'CH2', 118, 138, -1);
 
 mergeStatic(railBits, scene, 400);
 // beds: one mesh per material per 200m chunk (frustum culling still works)
@@ -1582,7 +1613,10 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null)
 {
   const platMat = platLightMat;
   const yellowMat = new THREE.MeshStandardMaterial({ color: 0xe8c63a, roughness: 0.9 });
-  const roofColors = [0xbfe0d6, 0xe8e6df, 0x9fc8bd, 0xdfe3e4, 0x8fb8ac];
+  // canopy colours as seen from above: green roofs over the Chuo and
+  // Keihin/Yamanote islands, grey, the dark solar roof of 7・8, green
+  // Tohoku, white Tokaido Shinkansen
+  const roofColors = [0x9cc4b6, 0xa6cdbf, 0xc9ccc9, 0x7d8494, 0xb4d2c6, 0x93c0ae, 0x93c0ae, 0xeef0ee, 0xeef0ee, 0xeef0ee];
   const fasciaMat = new THREE.MeshStandardMaterial({ color: 0xd9dde0, roughness: 0.7, side: THREE.DoubleSide });
   const platBits = [];
   // wide, shallow GABLE roofs (two straight slopes meeting at a low
@@ -1657,9 +1691,12 @@ const PLAT_INFO = [
   { name: '京浜東北・山手線', no: '3・4',   color: '#9bc31c' },
   { name: '山手・京浜東北線', no: '5・6',   color: '#56b4e0' },
   { name: '上野東京ライン',   no: '7・8',   color: '#f0a050' },
+  { name: '東海道線',         no: '9・10',  color: '#f0a050' },
+  { name: '東北新幹線',       no: '20・21', color: '#2e8b2e' },
+  { name: '東北新幹線',       no: '22・23', color: '#2e8b2e' },
   { name: '東海道新幹線',     no: '14・15', color: '#1565c0' },
   { name: '東海道新幹線',     no: '16・17', color: '#1565c0' },
-  { name: '東北新幹線',       no: '20・21', color: '#2e8b2e' },
+  { name: '東海道新幹線',     no: '18・19', color: '#1565c0' },
 ];
 {
   const signTex = (info) => {
@@ -1695,45 +1732,57 @@ const PLAT_INFO = [
   mergeStatic(signBits, scene);
 }
 
-/* ---------- Marunouchi park: lawns, paths and trees in front of the
-   old brick station, like the satellite photo ---------- */
+/* ---------- Marunouchi plaza in front of the brick station, after the
+   satellite photo: a granite forecourt, the white axis toward the
+   palace (Gyoko-dori), two lawns either side of it, the north and south
+   bus/taxi roundabouts and tree lines round the edge ---------- */
+const PLAZA = { x0: -141, x1: -76, z0: -118, z1: 110 };
+const ROTARIES = [{ x: -104, z: -58, r: 17 }, { x: -106, z: 40, r: 16 }];
 {
   const park = new THREE.Group();
   const lawnMat = new THREE.MeshStandardMaterial({ color: 0x6fae5a, roughness: 1 });
-  const pathMat = new THREE.MeshStandardMaterial({ color: 0xc9c2b4, roughness: 1 });
-  // central axis avenue (Gyoko-dori) leading to the station front
-  const avenue = new THREE.Mesh(new THREE.BoxGeometry(32, 0.06, 12), pathMat);
-  avenue.position.set(-89, 0.03, 0);
-  avenue.receiveShadow = true;
-  park.add(avenue);
-  // lawn panels in a 2×3 grid split by walking paths
-  for (const sz of [-1, 1]) {
-    for (let r = 0; r < 3; r++) {
-      const lawn = new THREE.Mesh(new THREE.BoxGeometry(24, 0.05, 24), lawnMat);
-      lawn.position.set(-92 + r * 1.5, 0.025, sz * (10 + 14 + r * 26));
-      lawn.scale.x = 1 - r * 0.08;
-      lawn.receiveShadow = true;
-      park.add(lawn);
+  const paveMat = new THREE.MeshStandardMaterial({ color: 0xb9b4aa, roughness: 0.95 });
+  const axisMat = new THREE.MeshStandardMaterial({ color: 0xd9d5cc, roughness: 0.9 });
+  const roadMat = new THREE.MeshStandardMaterial({ color: 0x55585c, roughness: 1 });
+  const islandMat = new THREE.MeshStandardMaterial({ color: 0xa9a59c, roughness: 1 });
+  const canopyMat = new THREE.MeshStandardMaterial({ color: 0x3e4247, roughness: 0.6, metalness: 0.3 });
+  const flat = (w, d, mat, x, y, z) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, 0.06, d), mat); m.position.set(x, y, z); m.receiveShadow = true; park.add(m); };
+  const { x0, x1, z0, z1 } = PLAZA;
+  flat(x1 - x0, z1 - z0, paveMat, (x0 + x1) / 2, 0.02, (z0 + z1) / 2);
+  flat(x1 - x0 + 120, 14, axisMat, (x0 + x1) / 2 - 60, 0.05, 0);           // the axis runs on west
+  for (const s of [-1, 1]) flat(29, 12, lawnMat, -122, 0.06, s * 15);
+  for (const R of ROTARIES) {
+    const ring = new THREE.Mesh(new THREE.RingGeometry(R.r * 0.55, R.r, 40).rotateX(-Math.PI / 2), roadMat);
+    ring.position.set(R.x, 0.06, R.z); ring.receiveShadow = true; park.add(ring);
+    const isl = new THREE.Mesh(new THREE.CircleGeometry(R.r * 0.55, 32).rotateX(-Math.PI / 2), islandMat);
+    isl.position.set(R.x, 0.07, R.z); isl.receiveShadow = true; park.add(isl);
+    // the round bus-stop canopy in the middle of each roundabout
+    const can = new THREE.Mesh(new THREE.RingGeometry(R.r * 0.18, R.r * 0.5, 32).rotateX(-Math.PI / 2), canopyMat);
+    can.material.side = THREE.DoubleSide; can.position.set(R.x, 3.6, R.z); can.castShadow = true; park.add(can);
+    for (let i = 0; i < 8; i++) {
+      const a = i / 8 * Math.PI * 2, p = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 3.6, 6), canopyMat);
+      p.position.set(R.x + Math.cos(a) * R.r * 0.34, 1.8, R.z + Math.sin(a) * R.r * 0.34); park.add(p);
     }
   }
-  // tree rings around the lawns (instanced trunks + crowns)
+  // tree lines along the plaza edges and the axis
   const rng = (() => { let s = 424242; return () => (s = s * 16807 % 2147483647) / 2147483647; })();
   const spots = [];
-  for (let i = 0; i < 54; i++) {
-    const sz = i % 2 ? 1 : -1;
-    spots.push([-103 + rng() * 27, sz * (16 + rng() * 86)]);
-  }
+  for (let z = z0 + 4; z < z1 - 2; z += 7) spots.push([x0 + 3 + rng(), z]);
+  for (let x = x0 + 8; x < x1 - 14; x += 7) { spots.push([x, z0 + 3 + rng()]); spots.push([x, z1 - 3 - rng()]); }
+  for (let x = x0 - 110; x < x0; x += 8) for (const s of [-1, 1]) spots.push([x, s * 10]);
+  const clear = ([px, pz]) => ROTARIES.every(R => Math.hypot(px - R.x, pz - R.z) > R.r + 2);
+  const pts = spots.filter(clear);
   const trunkGeo = new THREE.CylinderGeometry(0.14, 0.2, 1.8, 6);
   const crownGeo = new THREE.SphereGeometry(1.5, 8, 6);
   const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5a4634, roughness: 1 });
   const crownMat = new THREE.MeshStandardMaterial({ color: 0x4d7e42, roughness: 0.95 });
-  const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, spots.length);
-  const crowns = new THREE.InstancedMesh(crownGeo, crownMat, spots.length);
+  const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, pts.length);
+  const crowns = new THREE.InstancedMesh(crownGeo, crownMat, pts.length);
   const tm = new THREE.Matrix4();
-  spots.forEach(([px, pz], i) => {
+  pts.forEach(([px, pz], i) => {
     tm.makeTranslation(px, 0.9, pz);
     trunks.setMatrixAt(i, tm);
-    const s = 0.8 + rng() * 0.5;
+    const s = 0.9 + rng() * 0.5;
     tm.makeScale(s, s * (0.85 + rng() * 0.3), s);
     tm.setPosition(px, 1.8 + s * 0.9, pz);
     crowns.setMatrixAt(i, tm);
@@ -1742,6 +1791,8 @@ const PLAT_INFO = [
   crowns.instanceMatrix.needsUpdate = true;
   crowns.castShadow = true;
   park.add(trunks, crowns);
+  const stat = []; park.traverse(o => { if (o.isMesh && !o.isInstancedMesh) stat.push(o); });
+  mergeStatic(stat, park);
   scene.add(park);
 }
 
@@ -1835,7 +1886,7 @@ const WIRE_CONTACT = DECK + 6.0; // contact wire (what the pantograph touches)
   function catenary(line, zFrom, zTo) {
     const span = GANTRY_STEP;
     const mPts = [], cPts = [];
-    for (let z = zFrom; z <= zTo; z += 4) {
+    for (let z = zFrom; z <= zTo; z += 8) {
       const x = lineXAt(line, z);
       // messenger sags as a parabola within each gantry span
       const ph = ((z - zFrom) % span) / span;
@@ -1844,7 +1895,7 @@ const WIRE_CONTACT = DECK + 6.0; // contact wire (what the pantograph touches)
       cPts.push(new THREE.Vector3(x, WIRE_CONTACT, z));
     }
     const mk = (pts, r) => new THREE.Mesh(
-      new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), pts.length, r, 4, false), wireMat);
+      new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), pts.length, r, 3, false), wireMat);
     detailGroup.add(mk(mPts, 0.035));
     detailGroup.add(mk(cPts, 0.045));
     // droppers every ~9m, merged into one mesh per line (cheap draw call)
@@ -1853,17 +1904,13 @@ const WIRE_CONTACT = DECK + 6.0; // contact wire (what the pantograph touches)
       const x = lineXAt(line, z);
       const ph = ((z - zFrom) % span) / span;
       const top = WIRE_TOP - 0.5 * 4 * ph * (1 - ph);
-      const g = new THREE.CylinderGeometry(0.018, 0.018, top - WIRE_CONTACT, 4);
+      const g = new THREE.CylinderGeometry(0.018, 0.018, top - WIRE_CONTACT, 3, 1, true);
       g.translate(x, (top + WIRE_CONTACT) / 2, z);
       drops.push(g);
     }
     if (drops.length) detailGroup.add(new THREE.Mesh(BufferGeometryUtils.mergeGeometries(drops), dropMat));
   }
-  for (const [l, type] of Object.entries(LINE_DEFS)) {
-    if (type === 'T') catenary(l, -Z_END, Z_END);
-    else if (type === 'N') catenary(l, -Z_END, BUFFER_Z);
-    else catenary(l, -BUFFER_Z, Z_END);
-  }
+  for (const l of Object.keys(LINES)) { const [z0, z1] = lineSpan(l); catenary(l, z0, z1); }
   mergeStatic([...detailGroup.children], detailGroup, 400);
 }
 scene.add(detailGroup);
@@ -2422,9 +2469,8 @@ const cityFar = new THREE.Group();
 {
   const rng = (() => { let s = 1234567; return () => (s = s * 16807 % 2147483647) / 2147483647; })();
 
-  function makeBuilding(x, z, w, d, h, taper) {
+  function makeBuilding(x, z, w, d, h, taper, style = (rng() * 3) | 0, flatRoof = false) {
     const g = new THREE.Group();
-    const style = (rng() * 3) | 0;
     const mat = cityWindowMaterial(style, {
       roughness: style === 0 ? 0.35 : 0.7,
       metalness: style === 0 ? 0.4 : 0.1,
@@ -2443,10 +2489,10 @@ const cityFar = new THREE.Group();
       parts.push(plainTop(new THREE.BoxGeometry(w, ph, d)).translate(0, ph / 2, 0));
       const tw = w * 0.72, td = d * 0.72;
       parts.push(plainTop(new THREE.BoxGeometry(tw, h - ph, td)).translate(0, ph + (h - ph) / 2, 0));
-      parts.push(plainAll(new THREE.BoxGeometry(tw * 0.4, 4, td * 0.4)).translate(0, h + 2, 0));
+      if (!flatRoof) parts.push(plainAll(new THREE.BoxGeometry(tw * 0.4, 4, td * 0.4)).translate(0, h + 2, 0));
     } else {
       parts.push(plainTop(new THREE.BoxGeometry(w, h, d)).translate(0, h / 2, 0));
-      if (rng() < 0.6)
+      if (!flatRoof && rng() < 0.6)
         parts.push(plainAll(new THREE.BoxGeometry(w * 0.35, 3, d * 0.35)).translate(0, h + 1.5, 0));
     }
     const body = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(parts), mat);
@@ -2456,6 +2502,69 @@ const cityFar = new THREE.Group();
     return g;
   }
 
+  /* ---- landmarks where the satellite photo has them ----
+     Satellite pixels are turned into scene metres (0.32 m/px along the
+     tracks, z = 0 at the station's centre entrance). West-side blocks
+     are placed from the brick station's front (x = -75.6) or from the
+     edge of the rail corridor, east-side ones from the corridor edge,
+     so they hug the tracks exactly as in the photo. */
+  const SAT = 0.32, zOf = y => (y - 1010) * SAT;
+  const edgeL = (z0, z1) => { let m = 1e9; for (let z = z0; z <= z1; z += 4) m = Math.min(m, corridorEdges(z).left); return m; };
+  const edgeR = (z0, z1) => { let m = -1e9; for (let z = z0; z <= z1; z += 4) m = Math.max(m, corridorEdges(z).right); return m; };
+  const FRONT = -75.6, frontX = px => FRONT - (205 - px) * SAT;
+  const LM = [];
+  // kind: 'W' (x from satellite px on the plaza side), 'WE' (west, from the
+  // corridor edge: gap m, width m), 'EE' (east, from the corridor edge)
+  const lm = (o) => {
+    const z0 = zOf(o.y0), z1 = zOf(o.y1);
+    let x0, x1;
+    if (o.kind === 'W') { x0 = frontX(o.px0); x1 = frontX(o.px1); }
+    else if (o.kind === 'WE') { x1 = edgeL(z0, z1) - o.gap; x0 = x1 - o.w; }
+    else { x0 = edgeR(z0, z1) + o.gap; x1 = x0 + o.w; }
+    LM.push({ ...o, x0, x1, z0, z1 });
+  };
+  // Marunouchi (west)
+  lm({ name: 'Shin-Marunouchi', kind: 'W', px0: 0, px1: 210, y0: 435, y1: 615, h: 198, style: 0, taper: true, heli: true });
+  lm({ name: 'Marunouchi Oazo', kind: 'W', px0: 110, px1: 215, y0: 155, y1: 345, h: 150, style: 0, heli: true });
+  lm({ name: 'Marunouchi Center', kind: 'W', px0: -40, px1: 100, y0: 260, y1: 440, h: 110, style: 2 });
+  lm({ name: 'Nippon Life Marunouchi', kind: 'WE', gap: 20, w: 44, y0: 140, y1: 400, h: 175, style: 1, heli: true });
+  lm({ name: 'Tokyo Station north annex', kind: 'WE', gap: 16, w: 34, y0: 400, y1: 530, h: 90, style: 2 });
+  lm({ name: 'Otemachi north', kind: 'W', px0: -60, px1: 150, y0: -120, y1: 140, h: 120, style: 1 });
+  lm({ name: 'KITTE', kind: 'W', px0: 0, px1: 190, y0: 1345, y1: 1610, h: 44, style: 2 });
+  lm({ name: 'JP Tower', kind: 'W', px0: 0, px1: 130, y0: 1400, y1: 1590, h: 200, style: 0, heli: true });
+  lm({ name: 'Tokyo Building', kind: 'WE', gap: 18, w: 60, y0: 1630, y1: 1810, h: 164, style: 0, taper: true, heli: true });
+  lm({ name: 'Marunouchi Park Building', kind: 'WE', gap: 18, w: 64, y0: 1830, y1: 2040, h: 157, style: 0, heli: true });
+  // Yaesu (east)
+  lm({ name: 'Tekko Building', kind: 'EE', gap: 3, w: 48, y0: 150, y1: 360, h: 125, style: 2 });
+  lm({ name: 'Yaesu north', kind: 'EE', gap: 3, w: 38, y0: 360, y1: 600, h: 34, style: 2 });
+  lm({ name: 'Yaesu courtyard', kind: 'EE', gap: 44, w: 38, y0: 365, y1: 530, h: 62, style: 1 });
+  lm({ name: 'Yaesu tower', kind: 'EE', gap: 88, w: 44, y0: 425, y1: 690, h: 150, style: 0, heli: true });
+  lm({ name: 'GranTokyo North Tower', kind: 'EE', gap: 3, w: 64, y0: 680, y1: 990, h: 205, style: 0, heli: true });
+  lm({ name: 'GranTokyo South Tower', kind: 'EE', gap: 3, w: 52, y0: 1520, y1: 1830, h: 205, style: 0, heli: true });
+  lm({ name: 'Yaesu south', kind: 'EE', gap: 3, w: 44, y0: 1840, y1: 2010, h: 120, style: 1, heli: true });
+  // the GranRoof: a white pleated membrane on a low glass deck between
+  // the two GranTokyo towers, along the Yaesu side of the tracks
+  const GR = { z0: zOf(1000), z1: zOf(1515) }; GR.x0 = edgeR(GR.z0, GR.z1) + 3; GR.x1 = GR.x0 + 30;
+  // the Yaesu redevelopment site south-east (bare ground and cranes)
+  const SITE = { z0: zOf(1550), z1: zOf(2020) }; SITE.x0 = edgeR(SITE.z0, SITE.z1) + 60; SITE.x1 = SITE.x0 + 80;
+  const blocked = [
+    ...LM.map(b => [b.x0, b.x1, b.z0, b.z1]),
+    [GR.x0, GR.x1, GR.z0, GR.z1], [SITE.x0, SITE.x1, SITE.z0, SITE.z1],
+    [PLAZA.x0 - 4, -50, PLAZA.z0 - 4, PLAZA.z1 + 4],                   // plaza + brick station
+    [PLAZA.x0 - 130, PLAZA.x0, -9, 9],                                 // the axis avenue
+  ];
+  const hits = (x0, x1, z0, z1, m = 5) => blocked.some(([a, b, c, d]) => x0 < b + m && x1 > a - m && z0 < d + m && z1 > c - m);
+
+  const heliPads = [];
+  for (const b of LM) {
+    const w = b.x1 - b.x0, d = b.z1 - b.z0;
+    const g = makeBuilding((b.x0 + b.x1) / 2, (b.z0 + b.z1) / 2, w, d, b.h, !!b.taper, b.style, !!b.heli);
+    cityNear.add(g);
+    if (b.heli) heliPads.push([(b.x0 + b.x1) / 2, b.h + 0.02, (b.z0 + b.z1) / 2, Math.min(w, d) * (b.taper ? 0.5 : 0.62)]);
+  }
+
+  // everything else: rows of generic offices hugging the corridor and
+  // filling the blocks behind, skipping the landmarks, plaza and site
   for (const side of [-1, 1]) {
     let z = -720;
     while (z < 720) {
@@ -2463,55 +2572,94 @@ const cityFar = new THREE.Group();
       const gap = 7 + rng() * 12;
       const zC = z + d / 2;
       const edges = corridorEdges(zC);
-      let inner = side < 0 ? edges.left - 9 : edges.right + 9;
-      // keep the Marunouchi park & plaza clear in front of the brick station
-      if (side < 0 && Math.abs(zC) < 130) inner = Math.min(inner, -112);
-      // reserve the Yaesu front for the GranTokyo complex
-      if (side > 0 && Math.abs(zC) < 210) inner = Math.max(inner, 92);
-
-      const rows = Math.abs(zC) < 460 ? 2 : 1;
-      let xEdge = inner;
+      const rows = Math.abs(zC) < 460 ? 4 : 2;
+      let xEdge = side < 0 ? edges.left - 9 : edges.right + 9;
       for (let row = 0; row < rows; row++) {
         const w = 20 + rng() * 18;
         const street = row === 0 ? 0 : 8 + rng() * 8;
         const x = side < 0 ? xEdge - street - w / 2 : xEdge + street + w / 2;
+        xEdge = side < 0 ? x - w / 2 : x + w / 2;
         let h = 35 + rng() * 75;
         if (Math.abs(zC) < 280) h *= 1.3;
         if (rng() < 0.15) h *= 1.5;
         h = Math.min(175, Math.max(28, h));
-        const b = makeBuilding(x, zC, w, d - 4, h, rng() < 0.45);
+        const taper = rng() < 0.45;
+        if (hits(x - w / 2, x + w / 2, zC - d / 2 + 2, zC + d / 2 - 2)) continue;
+        const b = makeBuilding(x, zC, w, d - 4, h, taper);
         (row === 0 ? cityNear : cityFar).add(b);
-        xEdge = side < 0 ? x - w / 2 : x + w / 2;
       }
       z += d + gap;
     }
   }
-}
-// GranTokyo: the long white complex + twin towers hugging the Yaesu
-// (east) side of the yard, as in the satellite photo
-{
-  const whiteMat = () => {
-    const mat = cityWindowMaterial(2, { roughness: 0.5, metalness: 0.15 });
-    cityMats.push(mat);
-    return mat;
-  };
-  const slab = new THREE.Mesh(plainTop(new THREE.BoxGeometry(16, 38, 250)), whiteMat());
-  setFacadeRepeat(slab.material, 6, 2);
-  slab.position.set(68, 19, -6);
-  slab.castShadow = slab.receiveShadow = true;
-  cityNear.add(slab);
-  for (const tz of [-152, 142]) {
-    const tower = new THREE.Mesh(plainTop(new THREE.BoxGeometry(28, 150, 34)), whiteMat());
-    setFacadeRepeat(tower.material, 2, 9);
-    tower.position.set(78, 75, tz);
-    tower.castShadow = tower.receiveShadow = true;
-    cityNear.add(tower);
+
+  // rooftop helipads (green squares with a white H): two draw calls
+  {
+    const pads = [], marks = [];
+    for (const [x, y, z, s] of heliPads) {
+      pads.push(new THREE.BoxGeometry(s, 0.3, s).translate(x, y + 0.15, z));
+      marks.push(new THREE.BoxGeometry(s * 0.08, 0.1, s * 0.5).translate(x - s * 0.16, y + 0.35, z),
+        new THREE.BoxGeometry(s * 0.08, 0.1, s * 0.5).translate(x + s * 0.16, y + 0.35, z),
+        new THREE.BoxGeometry(s * 0.32, 0.1, s * 0.08).translate(x, y + 0.35, z));
+    }
+    const pm = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(pads), new THREE.MeshStandardMaterial({ color: 0x4f8f6a, roughness: 0.9 }));
+    const mm = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(marks), new THREE.MeshStandardMaterial({ color: 0xf2f2ee, roughness: 0.8 }));
+    pm.receiveShadow = true;
+    pm.userData.noFade = mm.userData.noFade = true;   // spread over the whole city
+    cityNear.add(pm, mm);
+  }
+
+  // GranRoof: glass deck + white folded membrane
+  {
+    const len = GR.z1 - GR.z0, w = GR.x1 - GR.x0, xc = (GR.x0 + GR.x1) / 2;
+    const deckMat = cityWindowMaterial(0, { roughness: 0.3, metalness: 0.4 });
+    setFacadeRepeat(deckMat, Math.max(1, len / 26 | 0), 1);
+    cityMats.push(deckMat);
+    const deck = new THREE.Mesh(plainTop(new THREE.BoxGeometry(w * 0.7, 12, len)), deckMat);
+    deck.position.set(xc - w * 0.12, 6, (GR.z0 + GR.z1) / 2); deck.castShadow = deck.receiveShadow = true;
+    cityNear.add(deck);
+    const folds = [], n = Math.round(len / 9);
+    for (let i = 0; i < n; i++) {
+      const zc = GR.z0 + (i + 0.5) * len / n;
+      for (const s of [-1, 1]) {
+        const g = new THREE.BoxGeometry(w, 0.35, len / n / 2 / Math.cos(0.3) + 0.2);
+        g.rotateX(s * 0.3); g.translate(xc, 27 + 1.3, zc + s * len / n / 4);
+        folds.push(g);
+      }
+    }
+    const membrane = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(folds), new THREE.MeshStandardMaterial({ color: 0xf4f4f0, roughness: 0.55, side: THREE.DoubleSide }));
+    membrane.castShadow = membrane.receiveShadow = true;
+    cityNear.add(membrane);
+    const mastGeo = [];
+    for (let i = 0; i <= n; i += 2) for (const dx of [-w / 2 + 2, w / 2 - 2])
+      mastGeo.push(new THREE.CylinderGeometry(0.35, 0.35, 27, 8).translate(xc + dx, 13.5, GR.z0 + i * len / n));
+    const masts = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(mastGeo), new THREE.MeshStandardMaterial({ color: 0xd8d8d4, roughness: 0.5, metalness: 0.3 }));
+    cityNear.add(masts);
+  }
+
+  // Yaesu redevelopment site: bare ground, site huts, two tower cranes
+  {
+    const lot = new THREE.Mesh(new THREE.BoxGeometry(SITE.x1 - SITE.x0, 0.08, SITE.z1 - SITE.z0),
+      new THREE.MeshStandardMaterial({ color: 0x9a8a72, roughness: 1 }));
+    lot.position.set((SITE.x0 + SITE.x1) / 2, 0.04, (SITE.z0 + SITE.z1) / 2); lot.receiveShadow = true;
+    cityNear.add(lot);
+    const huts = [], crane = [];
+    for (let i = 0; i < 5; i++) huts.push(new THREE.BoxGeometry(10, 3, 4).translate(SITE.x0 + 8 + i * 12, 1.5, SITE.z0 + 8));
+    for (const [cx, cz, h] of [[SITE.x0 + 25, SITE.z0 + 50, 62], [SITE.x0 + 55, SITE.z1 - 45, 70]]) {
+      crane.push(new THREE.BoxGeometry(1.8, h, 1.8).translate(cx, h / 2, cz),
+        new THREE.BoxGeometry(46, 1.4, 1.4).translate(cx - 10, h + 0.7, cz),
+        new THREE.BoxGeometry(3, 3, 3).translate(cx, h + 2, cz));
+    }
+    const hm = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(huts), new THREE.MeshStandardMaterial({ color: 0xdcdcd8, roughness: 0.8 }));
+    const cm = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(crane), new THREE.MeshStandardMaterial({ color: 0xe0b020, roughness: 0.6, metalness: 0.3 }));
+    cm.castShadow = true;
+    lot.userData.noFade = hm.userData.noFade = cm.userData.noFade = true;
+    cityNear.add(hm, cm);
   }
 }
 scene.add(cityNear);
 scene.add(cityFar);
 for (const grp of [cityNear, cityFar])
-  for (const b of grp.children) registerFadeable(b);
+  for (const b of grp.children) if (!b.userData.noFade) registerFadeable(b);
 // buildings never move — stop three re-deriving their matrices every frame
 for (const grp of [cityNear, cityFar])
   grp.traverse(o => { o.matrixAutoUpdate = false; });
@@ -3656,8 +3804,9 @@ function addTrain(typeKey, line, dir, phase, terminal = false) {
   t.route = buildRoute(line, dir);
   const entrySide = dir > 0 ? 'N:' : 'S:';
   const exitSide = dir > 0 ? 'S:' : 'N:';
-  t.entryBlock = entrySide + line;
-  t.exitBlock = (terminal ? entrySide : exitSide) + line;
+  // tracks that run into a shared main line share its throat blocks
+  t.entryBlock = entrySide + trunkOf(line);
+  t.exitBlock = (terminal ? entrySide : exitSide) + trunkOf(line);
   t.platBlock = 'P:' + line;
   t.sStop = t.route.sStop + t.len / 2;
   t.sExitClear = t.route.sAtZ(dir > 0 ? 190 : -190);
@@ -3858,7 +4007,9 @@ addTrain('ueno',     'UTN', 1, 22);
 addTrain('ueno',     'UTS',-1, 30);
 addTrain('chuo',     'CH1', 1, 5,  true);
 addTrain('tokaido',  'TKS1',-1, 11, true);
+addTrain('tokaido',  'TKS5',-1, 44, true);
 addTrain('tohoku',   'THS1', 1, 17, true);
+addTrain('tohoku',   'THS3', 1, 52, true);
 
 /* ---------- ride: each car body answers the track under ITS bogies ----------
    The track carries a fixed, position-based irregularity (a few
@@ -4797,8 +4948,8 @@ function shotPose(t, shot, P, T, A) {
   rig.shotFov = SHOT_FOV[shot] || 50;
   if (shot === 'overview' || !t) {
     A.set(0, 0, 0);
-    T.set(4, DECK + 3, -6);
-    P.set(-62, 44, 118).sub(T).multiplyScalar(portraitK()).add(T);
+    T.set(18, DECK + 3, -6);
+    P.set(-48, 46, 118).sub(T).multiplyScalar(portraitK()).add(T);
     return;
   }
   const vis = t.group.visible;
