@@ -170,6 +170,10 @@
   @media (max-width: 420px) {
     :root { --card-w: 96px; --card-h: 60px; --shot: 44px; --act: 70px; }
   }
+  /* idle: the helpers step back so the trains own the screen */
+  #dock, #shots, .corner, #actions, #b-back { transition: opacity .7s ease; }
+  body.idle #dock, body.idle #shots, body.idle .corner { opacity: .16; }
+  body.idle #actions { opacity: .45; }
   @media (prefers-reduced-motion: reduce) {
     #play, .depart[data-st=ready], #b-back.show, .card .st { animation: none !important; }
   }
@@ -248,8 +252,12 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 document.getElementById('app').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-// day ↔ night: nightBlend eases 0 → 1 and drives every night-time glow
-let isNight = false, nightBlend = 0;
+// time of day: 0 day, 1 late afternoon, 2 night. nightBlend / duskBlend
+// ease toward it; lightK() is how far the station & city lights are up
+// (fully at night, softly in the late afternoon)
+let tod = 0, nightBlend = 0, duskBlend = 0;
+const lightK = () => Math.max(nightBlend, 0.32 * duskBlend);
+let trainProbe = null;          // station reflection probe for the trains (built at boot)
 const TRAIN_GLOW = 0.5;        // lit car windows: warm, never blown out
 const HEMI_DAY = 0.6, HEMI_NIGHT = 0.62;
 const SUN_DAY = new THREE.Color(0xfff2dd), SUN_MOON = new THREE.Color(0x9ab4f0);
@@ -778,6 +786,10 @@ const hemiLight = new THREE.HemisphereLight(0xbfd6ff, 0x6b6257, HEMI_DAY);
 scene.add(hemiLight);
 
 const SUN_DIR = new THREE.Vector3(120, 160, 80).normalize();
+// late afternoon: low (≈13°) from the west-south-west — straight onto the
+// Marunouchi facade and the west sides of the trains
+const SUN_DUSK = new THREE.Vector3(-0.8, 0.235, 0.56).normalize();
+const curSun = SUN_DIR.clone();
 const sun = new THREE.DirectionalLight(0xfff2dd, 2.0);
 sun.position.copy(SUN_DIR).multiplyScalar(350);
 sun.castShadow = true;
@@ -847,29 +859,32 @@ const envMaps = (() => {
   })));
   const D = { top: new THREE.Color(0x6f9ad0), bottom: new THREE.Color(0xdde8f2), ground: new THREE.Color(0x6a6258), sun: 40 };
   const N = { top: new THREE.Color(0x13214a), bottom: new THREE.Color(0x5a5670), ground: new THREE.Color(0x2a2522), sun: 0 };
+  const K = { top: new THREE.Color(0x4f6aa8), bottom: new THREE.Color(0xe2d6c6), ground: new THREE.Color(0x5e5852), sun: 34 };
   const cubeRT = new THREE.WebGLCubeRenderTarget(64, { type: THREE.HalfFloatType });
   const cubeCam = new THREE.CubeCamera(0.1, 200, cubeRT);
-  let target = null, lastB = -1;
-  function render(b, into) {
-    u.topColor.value.copy(D.top).lerp(N.top, b);
-    u.bottomColor.value.copy(D.bottom).lerp(N.bottom, b);
-    u.ground.value.copy(D.ground).lerp(N.ground, b);
-    u.sunK.value = D.sun * (1 - b) ** 2;
+  let target = null, lastB = -1, lastD = -1;
+  function render(b, d, into) {
+    u.topColor.value.copy(D.top).lerp(K.top, d).lerp(N.top, b);
+    u.bottomColor.value.copy(D.bottom).lerp(K.bottom, d).lerp(N.bottom, b);
+    u.ground.value.copy(D.ground).lerp(K.ground, d).lerp(N.ground, b);
+    u.sunK.value = (D.sun + (K.sun - D.sun) * d) * (1 - b) ** 2;
+    u.sunDir.value.copy(curSun);
     cubeCam.update(renderer, es);
     return pmrem.fromCubemap(cubeRT.texture, into);
   }
-  // re-filter at most every ~3.5% of the blend (≈ every other frame of a
-  // day↔night fade), always exactly at the ends
-  function update(b) {
-    if (target && (b === lastB || (Math.abs(b - lastB) < 0.035 && b !== 0 && b !== 1))) return target.texture;
-    lastB = b;
-    target = render(b, target);
+  // re-filter at most every ~3.5% of a blend (≈ every other frame of a
+  // fade), always exactly at the ends
+  function update(b, d = 0) {
+    const ends = (b === 0 || b === 1) && (d === 0 || d === 1);
+    if (target && ((b === lastB && d === lastD) || (Math.abs(b - lastB) + Math.abs(d - lastD) < 0.035 && !ends))) return target.texture;
+    lastB = b; lastD = d;
+    target = render(b, d, target);
     return target.texture;
   }
-  const day = render(0, null).texture;       // fixed daylight copy (train pictures)
+  const day = render(0, 0, null).texture;    // fixed daylight copy (train pictures)
   return { update, day };
 })();
-scene.environment = envMaps.update(0);
+scene.environment = envMaps.update(0, 0);
 
 /* ---------- station lighting at night ----------
    Emissive surfaces don't light anything, so the platform lamps are
@@ -880,11 +895,13 @@ scene.environment = envMaps.update(0);
    floodlight from the plaza. Off (zero cost beyond one branch) by day. */
 const stationU = {
   uNight: { value: 0 },
+  uDark: { value: 0 },
   // per platform: centre x, bow weight, centre z, half length
   uPlat: { value: PLATFORMS.map(p => new THREE.Vector4(p.x, p.bw, p.off, p.len / 2)) },
 };
 const STATION_GLSL = `
 uniform float uNight;
+uniform float uDark;
 uniform vec4 uPlat[7];
 vec3 stationIrr(vec3 pv, vec3 nv) {
   if (uNight < 0.01) return vec3(0.);
@@ -929,6 +946,7 @@ vec3 stationIrr(vec3 pv, vec3 nv) {
 `;
 function patchStation(shader) {
   shader.uniforms.uNight = stationU.uNight;
+  shader.uniforms.uDark = stationU.uDark;
   shader.uniforms.uPlat = stationU.uPlat;
   shader.fragmentShader = shader.fragmentShader
     .replace('#include <common>', '#include <common>\n' + STATION_GLSL)
@@ -1592,6 +1610,14 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null)
   const deckProfile = [[-2.6, 0], [-2.6, PLAT_Y], [2.6, PLAT_Y], [2.6, 0]];
   const pillarGeo = new THREE.CylinderGeometry(0.13, 0.13, EAVE + 0.35 - PLAT_Y, 8);
   const pillarMat = new THREE.MeshStandardMaterial({ color: 0x5e6a72, roughness: 0.6, metalness: 0.4 });
+  const pillarFeet = [];
+  const radialShade = (() => {
+    const c = document.createElement('canvas'); c.width = c.height = 64;
+    const g = c.getContext('2d'), gr = g.createRadialGradient(32, 32, 3, 32, 32, 32);
+    gr.addColorStop(0, '#fff'); gr.addColorStop(0.35, '#999'); gr.addColorStop(1, '#000');
+    g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+    return new THREE.CanvasTexture(c);
+  })();
   const totalPillars = PLATFORMS.reduce((s, p) => s + Math.floor(p.len / 14), 0);
   const pillars = new THREE.InstancedMesh(pillarGeo, pillarMat, totalPillars);
   const m = new THREE.Matrix4();
@@ -1620,11 +1646,18 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null)
       const z = zP0 + 7 + k * 14;
       m.makeTranslation(cx(z), DECK + (PLAT_Y + EAVE + 0.35) / 2, z);
       pillars.setMatrixAt(pi++, m);
+      pillarFeet.push(new THREE.Matrix4().makeTranslation(cx(z), DECK + PLAT_Y + 0.006, z));
     }
   });
   pillars.instanceMatrix.needsUpdate = true;
   pillars.castShadow = true;
   scene.add(pillars);
+  // soft contact shade where each pillar meets the platform
+  const feet = new THREE.InstancedMesh(new THREE.PlaneGeometry(1.3, 1.3).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.38, depthWrite: false, alphaMap: radialShade }), pillarFeet.length);
+  pillarFeet.forEach((mm, i) => feet.setMatrixAt(i, mm));
+  feet.renderOrder = 1;
+  scene.add(feet);
   mergeStatic(platBits, scene);
 }
 
@@ -2313,7 +2346,7 @@ function cityWindowMaterial(style, opts) {
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', '#include <common>\n' + WINDOW_GLSL)
       // mid-ground walls sit a step darker than the lit foreground at night
-      .replace('#include <map_fragment>', '#include <map_fragment>\n\tdiffuseColor.rgb *= 1. - 0.5 * uNight;')
+      .replace('#include <map_fragment>', '#include <map_fragment>\n\tdiffuseColor.rgb *= 1. - 0.5 * uDark;')
       .replace('#include <emissivemap_fragment>',
         'totalEmissiveRadiance *= cityWindow(vEmissiveMapUv, normalize(transpose(mat3(viewMatrix)) * normal));');
   };
@@ -2855,12 +2888,12 @@ function n700Cabin(y, d, winFrom, winTo, carLen) {
   for (const dc of carLen ? [V.doorD, carLen - V.doorD] : [V.doorD]) {
     const du = d - dc;
     if (Math.abs(Math.abs(du) - V.doorW / 2) < 0.018 && y > V.doorY[0] && y < V.doorY[1]) { c = V.seam; bump = 90; }
-    if (roundRectIn(du, y - (V.doorWin[0] + V.doorWin[1]) / 2, 0.3, V.doorWin[1] - V.doorWin[0], 0.06)) { c = V.glass; rough = 0.08; metal = 0.6; glow = 255; }
+    if (roundRectIn(du, y - (V.doorWin[0] + V.doorWin[1]) / 2, 0.3, V.doorWin[1] - V.doorWin[0], 0.06)) { c = V.glass; rough = 0.05; metal = 0; glow = 255; }
   }
   if (d > winFrom && d < winTo) {
     const k = Math.round((d - winFrom - V.winW / 2) / V.pitch), cx = winFrom + V.winW / 2 + k * V.pitch;
     if (cx + V.winW / 2 <= winTo + 0.01 && roundRectIn(d - cx, y - (V.win[0] + V.win[1]) / 2, V.winW, V.win[1] - V.win[0], V.winR)) {
-      c = V.glass; rough = 0.08; metal = 0.6; glow = 255;
+      c = V.glass; rough = 0.05; metal = 0; glow = 255;
     }
   }
   return { c, rough, metal, glow, bump };
@@ -2950,7 +2983,7 @@ function leadSkin(type) {
         const inside = y > topC - Wd.down - 0.02 && ax < ww && !(ex > 0 && es < round && Math.hypot(ex, round - es) > round);
         const edge = y > topC - Wd.down - 0.1 && ax < ww + 0.08 && s > Wd.s0 - 0.08 && s < Wd.s1 + 0.08;
         if (edge) { col3 = frame; rough = 0.5; metal = 0.1; bump = 96; }
-        if (inside) { col3 = mix(glass, hex(0x35505e), Math.max(0, 1 - Math.abs(t - 0.35) * 4) * 0.25); rough = 0.06; metal = 0.9; }
+        if (inside) { col3 = mix(glass, hex(0x35505e), Math.max(0, 1 - Math.abs(t - 0.35) * 4) * 0.25); rough = 0.04; metal = 0; }
       }
       // ---- head/tail lamps
       for (const Lp of S.lamps) {
@@ -2985,6 +3018,7 @@ function leadSkin(type) {
             px = [I.data[o], I.data[o + 1], I.data[o + 2]];
           }
           if (px) { col3 = mix(col3, px, k); rough = rough + (0.35 - rough) * k; metal = metal + (0.15 - metal) * k; }
+          if (glow > 60) { rough = 0.05; metal = 0; }               // cabin windows: glossy glass
         } else if (type === 'n700' && ax > G.sillX - 0.02 && y <= G.topY) {
           const P = n700Cabin(y, dEnd, 2.9, L - (noseEnd + 1.6), 0);
           col3 = mix(col3, P.c, k); rough = P.rough; metal = P.metal; glow = P.glow; bump = P.bump;
@@ -3277,16 +3311,84 @@ function leadGear(type) {
 // sides get a night-time window glow: the dark glazing band of the side
 // texture becomes an emissive mask (see makeWindowGlow)
 const trainGlowMats = [];
-function sideMaterial(map, rough, metal, glow, rm = null) {
+/* ---------- windows with depth ----------
+   The side texture's window mask (the same one that drives the night
+   glow) marks glass. There the surface becomes a glossy dielectric
+   (roughness .05, metal 0: sky, canopies and buildings reflect with the
+   Fresnel angle), and behind it an interior is ray-marched in one step
+   per layer from the view ray and the uv derivatives: seat backs 0.7m
+   in, the far wall 2.6m in with the opposite windows, a ceiling light
+   strip. At night the glow follows that interior (bright ceiling, seats
+   darker, each car a little different) instead of one flat panel. No
+   extra geometry, nothing random per frame. */
+const GLASS_GLSL = `
+uniform vec4 uWin;           // car length, side arc length, window band lo / hi (arc m from the sill)
+varying float vInst;
+float carHash(float i) { return fract(sin(i * 12.9898 + 4.1) * 43758.5453); }
+vec2 interiorUV(vec2 uv, float d, vec3 V, vec3 gU, vec3 gV, vec3 N) {
+  vec3 dp = -V * d / max(dot(V, N), 0.2);
+  return uv + vec2(dot(gU, dp), dot(gV, dp));
+}
+`;
+function sideMaterial(map, rough, metal, glow, rm = null, win = null) {
   const m = new THREE.MeshStandardMaterial({ map, roughness: rough, metalness: metal });
   if (rm) { m.roughnessMap = m.metalnessMap = rm; m.roughness = 1; m.metalness = 1; }
   if (glow) {
     m.emissiveMap = glow; m.emissive.setHex(0xfff0d0);
-    m.emissiveIntensity = nightBlend * TRAIN_GLOW; trainGlowMats.push(m);
+    m.emissiveIntensity = lightK() * TRAIN_GLOW; trainGlowMats.push(m);
+  }
+  if (glow && win) {
+    const uWin = { value: new THREE.Vector4(win.len, win.arc, win.band[0], win.band[1]) };
+    m.onBeforeCompile = shader => {
+      patchStation(shader);
+      shader.uniforms.uWin = uWin;
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying float vInst;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\n#ifdef USE_INSTANCING\n\tvInst = float(gl_InstanceID);\n#else\n\tvInst = 0.;\n#endif');
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\n' + GLASS_GLSL)
+        .replace('#include <map_fragment>', `#include <map_fragment>
+  float winM = smoothstep(0.03, 0.35, texture2D(emissiveMap, vEmissiveMapUv).r);
+  vec3 wV = normalize(vViewPosition), wP = -vViewPosition;
+  vec3 dp1 = dFdx(wP), dp2 = dFdy(wP); vec2 du1 = dFdx(vEmissiveMapUv), du2 = dFdy(vEmissiveMapUv);
+  vec3 wN = normalize(cross(dp1, dp2)); if (dot(wN, wV) < 0.) wN = -wN;
+  vec3 p2 = cross(dp2, wN), p1 = cross(wN, dp1);
+  float det = dot(dp1, p2); det = abs(det) < 1e-12 ? 1e-12 : det;
+  vec3 gU = (p2 * du1.x + p1 * du2.x) / det, gV = (p2 * du1.y + p1 * du2.y) / det;
+  vec2 us = interiorUV(vEmissiveMapUv, 0.7, wV, gU, gV, wN) * uWin.xy;
+  vec2 uw = interiorUV(vEmissiveMapUv, 2.6, wV, gU, gV, wN) * uWin.xy;
+  float bh = uWin.w - uWin.z;
+  float sx = fract(us.x / 0.95);
+  float seat = smoothstep(0.08, 0.16, sx) * (1. - smoothstep(0.55, 0.63, sx)) * (1. - smoothstep(uWin.z + 0.38 * bh, uWin.z + 0.5 * bh, us.y));
+  float farWin = smoothstep(uWin.z + 0.1 * bh, uWin.z + 0.25 * bh, uw.y) * (1. - smoothstep(uWin.w - 0.15 * bh, uWin.w, uw.y));
+  float ceil = smoothstep(uWin.w - 0.25 * bh, uWin.w + 0.1 * bh, uw.y);
+  vec3 interior = mix(vec3(0.04, 0.045, 0.05), vec3(0.11, 0.13, 0.15), farWin * (1. - uNight));
+  interior = mix(interior, vec3(0.2, 0.2, 0.19), ceil * 0.5);
+  interior = mix(interior, vec3(0.02, 0.022, 0.026), seat * 0.8);
+  diffuseColor.rgb = mix(diffuseColor.rgb, interior, winM);
+  // lit from the ceiling: brighter toward the top, seat backs a little
+  // darker, each car a touch different — steady, never flickering
+  float winLight = (0.62 + 0.55 * ceil) * (1. - 0.22 * seat) * (0.88 + 0.22 * carHash(vInst));`)
+        .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n\troughnessFactor = mix(roughnessFactor, 0.05, winM);')
+        .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\n\tmetalnessFactor = mix(metalnessFactor, 0.0, winM);')
+        .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n\ttotalEmissiveRadiance *= mix(1., winLight, winM);');
+    };
   }
   return m;
 }
 
+// window band (arc metres from the sill) and strip dims for the glass shader
+function windowSpec(T) {
+  const side = profileOf(T.profile).side, al = arcLens(side), arc = al[al.length - 1], len = profileOf(T.profile).P.len;
+  const fromTop = f => [(1 - f[1]) * arc, (1 - f[0]) * arc];
+  let band;
+  if (T.atlas) band = fromTop([0.3, 0.72]);
+  else if (T.e5Atlas) band = fromTop([0.14, 0.52]);
+  else if (T.k233Atlas || T.band) band = fromTop([0.2, 0.66]);
+  else if (T.profile === 'n700') { const G = sideGeom('n700'); band = [G.sideV(1.67, N700_LIV.win[0]) * arc, G.sideV(1.67, N700_LIV.win[1]) * arc]; }
+  else band = [0.3 * arc, 0.7 * arc];
+  return { len, arc, band };
+}
 function buildTrain(typeKey) {
   const T = trainTypes[typeKey];
   const isShink = !!T.shink;
@@ -3296,27 +3398,29 @@ function buildTrain(typeKey) {
   const halosPlus = [], halosMinus = [];
 
   let sideMatA, sideMatB, roofMat, acMat;
+  const W_ = windowSpec(T);
   if (T.atlas) {
-    sideMatA = sideMaterial(yamanoteMats.side1, 0.4, 0.15, yamanoteMats.side1Glow);
-    sideMatB = sideMaterial(yamanoteMats.side2, 0.4, 0.15, yamanoteMats.side2Glow);
+    // stainless: brighter, finer reflection than painted bodies
+    sideMatA = sideMaterial(yamanoteMats.side1, 0.34, 0.32, yamanoteMats.side1Glow, null, W_);
+    sideMatB = sideMaterial(yamanoteMats.side2, 0.34, 0.32, yamanoteMats.side2Glow, null, W_);
     roofMat = new THREE.MeshStandardMaterial({ map: yamanoteMats.roof, roughness: 0.55 });
     acMat = new THREE.MeshStandardMaterial({ map: yamanoteMats.ac, roughness: 0.6 });
   } else if (T.e5Atlas && e5Mats.side1) {
     // E5 Hayabusa photo atlas
-    sideMatA = sideMaterial(e5Mats.side1, 0.35, 0.15, e5Mats.side1Glow);   // lead-car cabin uses the same 0.35 / 0.15
-    sideMatB = sideMaterial(e5Mats.side2, 0.35, 0.15, e5Mats.side2Glow);
+    sideMatA = sideMaterial(e5Mats.side1, 0.35, 0.15, e5Mats.side1Glow, null, W_);   // lead-car cabin uses the same 0.35 / 0.15
+    sideMatB = sideMaterial(e5Mats.side2, 0.35, 0.15, e5Mats.side2Glow, null, W_);
     roofMat = new THREE.MeshStandardMaterial({ map: e5Mats.roof, roughness: 0.45 });
     acMat = roofCarMat;
   } else if ((T.k233Atlas && keihinMats.side1) || (T.band && T.mats.side1)) {
     // E233 photo atlas (Keihin as shot; Chuo / Ueno-Tokyo re-banded)
     const km = T.band ? T.mats : keihinMats;
-    sideMatA = sideMaterial(km.side1, 0.42, 0.18, keihinMats.side1Glow);
-    sideMatB = sideMaterial(km.side2, 0.42, 0.18, keihinMats.side2Glow);
+    sideMatA = sideMaterial(km.side1, 0.36, 0.32, keihinMats.side1Glow, null, W_);
+    sideMatB = sideMaterial(km.side2, 0.36, 0.32, keihinMats.side2Glow, null, W_);
     roofMat = new THREE.MeshStandardMaterial({ map: keihinMats.roof, roughness: 0.55 });
     acMat = roofCarMat;
   } else {
     sideMatA = sideMatB = T.sideRM
-      ? sideMaterial(T.sideClosed, 0.35, 0.12, T.sideGlow, T.sideRM)
+      ? sideMaterial(T.sideClosed, 0.35, 0.12, T.sideGlow, T.sideRM, W_)
       : sideMaterial(T.sideClosed, 0.45, 0.25, T.sideGlow);
     if (T.roofTex) roofMat = new THREE.MeshStandardMaterial({ map: T.roofTex, roughness: 0.5 });
     else if (T.roofColor) roofMat = new THREE.MeshStandardMaterial({ color: T.roofColor, roughness: 0.55 });
@@ -3456,6 +3560,7 @@ function buildTrain(typeKey) {
   let acc = 0;
   carLens.forEach(cl => { carOff.push(acc + cl / 2); acc += cl + CAR_GAP; });
   const len = acc - CAR_GAP;
+  if (trainProbe && trainProbe.tex) trainProbe.apply(group);
   return { group, cars, body, bodyIdx, gear, contact, bogieZ, bodyW, leads, gangway, gwLocal, gwLocals, carLens, carOff,
     sideMatA, sideMatB, lampsPlus, lampsMinus,
     halosPlus, halosMinus, len, carLen: L, tipZ: carLens[0] / 2, type: T, typeKey, atlas: !!T.atlas };
@@ -4410,33 +4515,47 @@ const dayTop = new THREE.Color(0x3d7ad6), dayBot = new THREE.Color(0xcfe4f7);
 const nightTop = new THREE.Color(0x060c20), nightBot = new THREE.Color(0x2a3150);
 const dayFog = new THREE.Color(0xcfe4f7), nightFog = new THREE.Color(0x1d2440);
 
+// late afternoon: warm only where the sun actually falls; the sky fill,
+// the haze and the shade stay neutral-to-cool (no orange cast)
+const duskTop = new THREE.Color(0x4f70b4), duskBot = new THREE.Color(0xe4d6c4), duskFog = new THREE.Color(0xc2c1c3);
+const SUN_DUSKC = new THREE.Color(0xffbe7c), HEMI_SKY_K = new THREE.Color(0x9cb2e2), HEMI_GND_K = new THREE.Color(0x5c544e);
 function updateDayNight(dt) {
-  const target = isNight ? 1 : 0;
-  nightBlend += (target - nightBlend) * Math.min(1, dt * 1.6);
-  const b = nightBlend;
-  skyUniforms.topColor.value.copy(dayTop).lerp(nightTop, b);
-  skyUniforms.bottomColor.value.copy(dayBot).lerp(nightBot, b);
-  scene.fog.color.copy(dayFog).lerp(nightFog, b);
+  const k = Math.min(1, dt * 1.6);
+  nightBlend += ((tod === 2 ? 1 : 0) - nightBlend) * k;
+  duskBlend += ((tod === 1 ? 1 : 0) - duskBlend) * k;
+  for (const key of ['n', 'd']) {                      // settle exactly (lets env/probe stop updating)
+    const v = key === 'n' ? nightBlend : duskBlend, tg = key === 'n' ? (tod === 2 ? 1 : 0) : (tod === 1 ? 1 : 0);
+    if (Math.abs(v - tg) < 0.002) { if (key === 'n') nightBlend = tg; else duskBlend = tg; }
+  }
+  const b = nightBlend, d = duskBlend, L = lightK();
+  curSun.copy(SUN_DIR).lerp(SUN_DUSK, d).normalize();
+  skyUniforms.topColor.value.copy(dayTop).lerp(duskTop, d).lerp(nightTop, b);
+  skyUniforms.bottomColor.value.copy(dayBot).lerp(duskBot, d).lerp(nightBot, b);
+  skyUniforms.sunDir.value.copy(curSun);
+  scene.fog.color.copy(dayFog).lerp(duskFog, d).lerp(nightFog, b);
+  // late afternoon: a stronger, warm, low sun; cool sky fill in the shade.
   // by night the "sun" becomes soft bluish moonlight so the yard still reads
-  sun.intensity = 2.0 * (1 - b) + 0.6 * b;
-  sun.color.copy(SUN_DAY).lerp(SUN_MOON, b);
-  hemiLight.intensity = HEMI_DAY * (1 - b) + HEMI_NIGHT * b;
-  hemiLight.color.copy(HEMI_SKY_D).lerp(HEMI_SKY_N, b);
-  hemiLight.groundColor.copy(HEMI_GND_D).lerp(HEMI_GND_N, b);
+  sun.intensity = (2.0 + 0.6 * d) * (1 - b) + 0.6 * b;
+  sun.color.copy(SUN_DAY).lerp(SUN_DUSKC, d).lerp(SUN_MOON, b);
+  hemiLight.intensity = (HEMI_DAY - 0.16 * d) * (1 - b) + HEMI_NIGHT * b;
+  hemiLight.color.copy(HEMI_SKY_D).lerp(HEMI_SKY_K, d).lerp(HEMI_SKY_N, b);
+  hemiLight.groundColor.copy(HEMI_GND_D).lerp(HEMI_GND_K, d).lerp(HEMI_GND_N, b);
   skyUniforms.sunGlow.value = 1 - b;
   skyUniforms.moonGlow.value = b;
-  const env = envMaps.update(Math.round(b * 1000) / 1000);
+  const env = envMaps.update(Math.round(b * 1000) / 1000, Math.round(d * 1000) / 1000);
   if (scene.environment !== env) scene.environment = env;
-  stationU.uNight.value = b;
-  platLightMat.emissiveIntensity = b * 0.12;          // real light does the work now
+  stationU.uNight.value = L;
+  stationU.uDark.value = b;
+  platLightMat.emissiveIntensity = L * 0.12;          // real light does the work now
   starMat.opacity = b * 0.9;
   moon.material.opacity = b;
   renderer.toneMappingExposure = 1.0 - b * 0.02;
-  roofLightMat.emissiveIntensity = b * 1.1;
-  for (const m of station.userData.glowMats) m.emissiveIntensity = b * 1.1;
-  for (const m of cityMats) m.emissiveIntensity = b * 1.0;
-  for (const m of trainGlowMats) m.emissiveIntensity = b * TRAIN_GLOW;
-  for (const m of haloMats) m.opacity = 0.08 + b * 0.5;
+  roofLightMat.emissiveIntensity = L * 1.1;
+  for (const m of station.userData.glowMats) m.emissiveIntensity = L * 1.1;
+  for (const m of cityMats) m.emissiveIntensity = L * 1.0;
+  for (const m of trainGlowMats) m.emissiveIntensity = Math.max(b, 0.18 * d) * TRAIN_GLOW;
+  for (const m of haloMats) m.opacity = 0.08 + L * 0.5;
+  if (trainProbe) trainProbe.maybeCapture();
 }
 
 /* ================================================================
@@ -4603,7 +4722,18 @@ function resolveShot(t) {
 }
 
 // desired pose for a shot → P (camera), T (look-at), A (anchor it rides with)
+/* field of view per shot (vertical, landscape): longer lenses from further
+   back for the nose and pacing shots so the nose isn't bloated and the
+   cars behind don't shrink away; a normal lens at eye level; wide only in
+   the cab. Portrait screens widen it (applyFov). */
+const SHOT_FOV = { overview: 52, plat: 46, nose: 30, side: 32, doors: 40, cab: 62 };
+function applyFov(f) {
+  const a = camera.aspect;
+  const want = f * (a < 1 ? Math.min(1.32, 1 + (1 - a) * 0.6) : 1);
+  if (Math.abs(camera.fov - want) > 0.01) { camera.fov = want; camera.updateProjectionMatrix(); }
+}
 function shotPose(t, shot, P, T, A) {
+  rig.shotFov = SHOT_FOV[shot] || 50;
   if (shot === 'overview' || !t) {
     A.set(0, 0, 0);
     T.set(4, DECK + 3, -6);
@@ -4648,8 +4778,9 @@ function shotPose(t, shot, P, T, A) {
   }
   if (shot === 'nose') {
     const [px, pz] = perp(_fa, yardSide(_fa.x, _fa.z));
-    T.set(_fa.x - _fa.fx * 7, DECK + 2.1, _fa.z - _fa.fz * 7);
-    P.set(_fa.x + _fa.fx * 13 * Math.min(k, 1.25) + px * 5.5, DECK + 2.8, _fa.z + _fa.fz * 13 * Math.min(k, 1.25) + pz * 5.5);
+    const kk = Math.min(k, 1.25);
+    T.set(_fa.x - _fa.fx * 12, DECK + 2.2, _fa.z - _fa.fz * 12);
+    P.set(_fa.x + _fa.fx * 24 * kk + px * 10, DECK + 3.6, _fa.z + _fa.fz * 24 * kk + pz * 10);
     return;
   }
   if (shot === 'side') {
@@ -4659,7 +4790,7 @@ function shotPose(t, shot, P, T, A) {
     // neighbouring tracks and platform pillars can't cut across the view
     // (a canopy in the way fades out like any other occluder)
     T.set(_fb.x + _fb.fx * 4, DECK + 2.2, _fb.z + _fb.fz * 4);
-    P.set(_fb.x + px * 12 * k + _fb.fx * 6, DECK + 8.5, _fb.z + pz * 12 * k + _fb.fz * 6);
+    P.set(_fb.x + px * 21 * k + _fb.fx * 9, DECK + 11.5, _fb.z + pz * 21 * k + _fb.fz * 9);
     return;
   }
   // doors: from the platform, looking along the open doors to the cab
@@ -4806,6 +4937,8 @@ function updateRig(dt, now) {
     }
     tr.k = Math.min(1, tr.k + dt / tr.dur);
     const e = easeIO(tr.k);
+    if (tr.f0 === undefined) tr.f0 = rig.fov || rig.shotFov;
+    rig.fov = tr.f0 + (rig.shotFov - tr.f0) * e;
     rig.pos.lerpVectors(tr.p0, _P, e); rig.pos.y += tr.lift * Math.sin(Math.PI * e);
     rig.tgt.lerpVectors(tr.t0, _T, e);
     if (tr.k >= 1) {
@@ -4816,11 +4949,13 @@ function updateRig(dt, now) {
     // ride the anchor exactly, smooth only the offsets (no lag, no twitch)
     const a = 1 - Math.exp(-dt * 5);
     rig.oP.lerp(_P.sub(_A), a); rig.oT.lerp(_T.sub(_A), a);
+    rig.fov = (rig.fov || rig.shotFov) + (rig.shotFov - (rig.fov || rig.shotFov)) * (1 - Math.exp(-dt * 3));
     rig.pos.copy(_A).add(rig.oP); rig.tgt.copy(_A).add(rig.oT);
   }
   camera.position.copy(rig.pos);
   camera.lookAt(rig.tgt);
   controls.target.copy(rig.tgt);
+  applyFov(rig.fov);
 }
 function enterManual() {
   rig.lastTouch = simNow;
@@ -4934,6 +5069,7 @@ const ICON = {
   snd: '<path d="M3 9.5v5h3.5l6 4.5V5L6.5 9.5z" fill="currentColor"/><path d="M16 8.5a4.5 4.5 0 010 7M18.8 5.8a8.5 8.5 0 010 12.4"/>',
   mute: '<path d="M3 9.5v5h3.5l6 4.5V5L6.5 9.5z" fill="currentColor"/><path d="M16.5 9.5l5 5M21.5 9.5l-5 5"/>',
   moon: '<path d="M20 14.5A8.5 8.5 0 019.5 4a8.5 8.5 0 1010.5 10.5z" fill="currentColor"/>',
+  dusk: '<path d="M6.5 16a5.5 5.5 0 0111 0z" fill="currentColor"/><path d="M2 16h20M4 19.5h16M12 5v3M5.2 8.7l2 2M18.8 8.7l-2 2"/>',
   sun: '<circle cx="12" cy="12" r="4.2" fill="currentColor"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/>',
   gear: '<circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/>',
   eye: '<path d="M1.5 12S5.5 5 12 5s10.5 7 10.5 7-4 7-10.5 7S1.5 12 1.5 12z"/><circle cx="12" cy="12" r="3.3" fill="currentColor"/>',
@@ -4983,7 +5119,7 @@ const ui = (() => {
   bBack.innerHTML = svg('eye');
   bBack.addEventListener('click', () => { exitManual(true); sound.tick(); });
   bSnd.addEventListener('click', () => { setSound(!sound.on); });
-  bNight.addEventListener('click', () => { isNight = !isNight; savePref('night', isNight); sound.tick(); refresh(); });
+  bNight.addEventListener('click', () => { tod = (tod + 1) % 3; savePref('tod', tod); sound.tick(); refresh(); });
   // settings: long-press so little hands don't open it by accident
   let holdT = null;
   const startHold = e => {
@@ -5058,7 +5194,7 @@ const ui = (() => {
     shots.classList.toggle('show', !!rig.selType);
     for (const s in shotBtns) shotBtns[s].classList.toggle('on', rig.shot === s);
     bBack.classList.toggle('show', rig.manual);
-    const si = sound.on ? 'snd' : 'mute', ni = isNight ? 'sun' : 'moon';
+    const si = sound.on ? 'snd' : 'mute', ni = ['dusk', 'moon', 'sun'][tod];   // what the next tap brings
     if (bSnd._i !== si) { bSnd._i = si; bSnd.innerHTML = svg(si); bSnd.classList.toggle('off', !sound.on); }
     if (bNight._i !== ni) { bNight._i = ni; bNight.innerHTML = svg(ni); }
     // depart button: appears when the watched train stands at a platform
@@ -5196,8 +5332,33 @@ function renderThumbs() {
   el.addEventListener('wheel', () => enterManual(), { passive: true });
   el.addEventListener('contextmenu', e => e.preventDefault());
 }
+/* ---------- idle UI ----------
+   After a while without input the controls fade. The touch that brings
+   them back is swallowed (no button press, no train pick) — a drag or
+   pinch from that touch still moves the camera. */
+const IDLE_S = 7;
+let lastInput = performance.now(), idle = false, swallowUntil = 0;
+function wake(swallow) {
+  lastInput = performance.now();
+  if (idle) {
+    idle = false; document.body.classList.remove('idle');
+    if (swallow) swallowUntil = performance.now() + 700;
+  }
+}
+document.addEventListener('pointerdown', () => wake(true), true);
+document.addEventListener('keydown', () => wake(false), true);
+document.addEventListener('wheel', () => wake(false), { capture: true, passive: true });
+document.addEventListener('click', e => {
+  if (performance.now() < swallowUntil) { e.preventDefault(); e.stopPropagation(); swallowUntil = 0; }
+}, true);
+setInterval(() => {
+  if (!idle && started && !rig.manual && document.getElementById('sheet').hidden && performance.now() - lastInput > IDLE_S * 1000) {
+    idle = true; document.body.classList.add('idle');
+  }
+}, 500);
 function onTap(x, y) {
   if (!started) return;
+  if (performance.now() < swallowUntil) { swallowUntil = 0; return; }
   _ndc.set((x / window.innerWidth) * 2 - 1, -(y / window.innerHeight) * 2 + 1);
   raycaster.setFromCamera(_ndc, camera);
   for (const bb of billboards)
@@ -5260,7 +5421,7 @@ document.addEventListener('visibilitychange', () => {
 function layoutCamera() {
   const W = window.innerWidth, H = window.innerHeight;
   camera.aspect = W / H;
-  camera.fov = camera.aspect < 1 ? Math.min(78, 60 + (1 - camera.aspect) * 34) : 60;
+  applyFov(rig.fov || 52);
   const dock = document.getElementById('dock');
   const dh = dock ? dock.offsetHeight : 0;
   document.documentElement.style.setProperty('--dock-h', dh + 'px');
@@ -5277,7 +5438,8 @@ function layoutCamera() {
 // normally on its terminal tracks.)
 
 let currentQuality = qualities[prefs.quality] ? prefs.quality : (likelyLowEnd ? 'med' : 'high');
-if (prefs.night) { isNight = true; nightBlend = 1; }
+tod = [0, 1, 2].includes(prefs.tod) ? prefs.tod : (prefs.night ? 2 : 0);
+nightBlend = tod === 2 ? 1 : 0; duskBlend = tod === 1 ? 1 : 0;
 
 // all four photo sheets decode in parallel, then every train is rebuilt
 // once (it used to chain the loads and rebuild the fleet twice)
@@ -5298,6 +5460,57 @@ function rebuildAllTrains() {
   }
   renderThumbs();
 }
+/* ---------- what the trains reflect ----------
+   The sky-only environment made the car bodies reflect an empty sky. One
+   probe at the heart of the station (platform canopies, the brick
+   station, the office towers — trains hidden, so no car ever reflects
+   itself) is rendered into a small cube and pre-filtered, and every
+   train material uses it. It is re-captured only when the light changes
+   (≈ twice a second during a day/afternoon/night fade, once when it
+   settles) — never per frame, never per train. Low quality skips it. */
+trainProbe = (() => {
+  const pm = new THREE.PMREMGenerator(renderer);
+  const rt = new THREE.WebGLCubeRenderTarget(128, { type: THREE.HalfFloatType });
+  const cc = new THREE.CubeCamera(0.5, 1200, rt);
+  cc.position.set(12, DECK + 3.4, 12);
+  let target = null, lastKey = '', lastAt = -1e9, pendingSince = 0;
+  const P = {
+    get tex() { return target && target.texture; },
+    apply(root) {
+      root.traverse(o => {
+        if (!o.material) return;
+        for (const m of Array.isArray(o.material) ? o.material : [o.material])
+          if (m.isMeshStandardMaterial && m.envMap !== target.texture) { m.envMap = target.texture; m.needsUpdate = true; }
+      });
+    },
+    capture() {
+      if (currentQuality === 'low') return;
+      const vis = trains.map(t => t.group.visible);
+      trains.forEach(t => { t.group.visible = false; });
+      const sp = skyGroup.position.clone();
+      skyGroup.position.copy(cc.position);
+      const auto = renderer.shadowMap.autoUpdate;
+      renderer.shadowMap.autoUpdate = false;           // reuse this frame's shadow map
+      cc.update(renderer, scene);
+      renderer.shadowMap.autoUpdate = auto;
+      skyGroup.position.copy(sp);
+      trains.forEach((t, i) => { t.group.visible = vis[i]; });
+      const first = !target;
+      target = pm.fromCubemap(rt.texture, target);
+      if (first) for (const t of trains) P.apply(t.group);
+      lastAt = performance.now();
+    },
+    maybeCapture() {
+      if (!appReady || currentQuality === 'low') return;
+      const key = nightBlend.toFixed(2) + ':' + duskBlend.toFixed(2);
+      if (key === lastKey) return;
+      const now = performance.now();
+      const settled = (nightBlend === 0 || nightBlend === 1) && (duskBlend === 0 || duskBlend === 1);
+      if (!target || settled || now - lastAt > 500) { lastKey = key; P.capture(); }
+    },
+  };
+  return P;
+})();
 const loadTex = src => new Promise(res => new THREE.TextureLoader().load(src, res, undefined, () => res(null)));
 const maxAniso = renderer.capabilities.getMaxAnisotropy();
 const texturesReady = Promise.all([atlasData, e5Data, keihinData, keihinFaceData].map(loadTex))
@@ -5454,26 +5667,36 @@ function updateClock() {
    One fixed 480×560m shadow box smeared every texel over ~25cm. Now the
    box is centred on what you're looking at and sized to the zoom, and
    snapped to whole texels in light space so edges don't shimmer. */
-const LIGHT_R = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), SUN_DIR).normalize();
-const LIGHT_U = new THREE.Vector3().crossVectors(SUN_DIR, LIGHT_R).normalize();
+const LIGHT_R = new THREE.Vector3(), LIGHT_U = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
 const _sc = new THREE.Vector3();
+const SHADOW_LEVELS = [36, 55, 85, 130, 200, 300];
 function updateSunShadow() {
   if (!sun.castShadow) return;
   const cam = sun.shadow.camera;
+  // the box is one of a few fixed sizes (texel-snapped, so the shadow
+  // edges never swim), chosen from how far the view reaches; it only
+  // steps down after the need has clearly dropped (no flicker at a border)
   const dist = camera.position.distanceTo(controls.target);
-  const want = THREE.MathUtils.clamp(dist * 1.15 + 40, 70, 300);
-  if (Math.abs(cam.right - want) > want * 0.12 || cam.top !== cam.right) {
+  const need = dist * 1.05 + 22;
+  const LV = SHADOW_LEVELS;
+  let li = LV.indexOf(cam.right); if (li < 0) li = LV.length - 1;
+  if (need > LV[li] && li < LV.length - 1) li = LV.findIndex(v => v >= need) >= 0 ? LV.findIndex(v => v >= need) : LV.length - 1;
+  else if (li > 0 && need < LV[li - 1] * 0.75) li = LV.findIndex(v => v >= need);
+  const want = LV[li];
+  if (cam.right !== want || cam.top !== want) {
     cam.left = cam.bottom = -want; cam.right = cam.top = want;
     cam.updateProjectionMatrix();
   }
+  LIGHT_R.crossVectors(_up, curSun).normalize();
+  LIGHT_U.crossVectors(curSun, LIGHT_R).normalize();
   const texel = (2 * cam.right) / sun.shadow.mapSize.x;
   const t = controls.target;
   const a = Math.round(t.dot(LIGHT_R) / texel) * texel;
   const b = Math.round(t.dot(LIGHT_U) / texel) * texel;
-  const c = t.dot(SUN_DIR);
-  _sc.set(0, 0, 0).addScaledVector(LIGHT_R, a).addScaledVector(LIGHT_U, b).addScaledVector(SUN_DIR, c);
+  const c = t.dot(curSun);
+  _sc.set(0, 0, 0).addScaledVector(LIGHT_R, a).addScaledVector(LIGHT_U, b).addScaledVector(curSun, c);
   sun.target.position.copy(_sc);
-  sun.position.copy(_sc).addScaledVector(SUN_DIR, 380);
+  sun.position.copy(_sc).addScaledVector(curSun, 380);
 }
 
 /* ---------- night bloom (high preset only) ----------
@@ -5570,8 +5793,12 @@ if (/[?&]debug\b/.test(location.search)) window.__sim = {
   get now() { return simNow; },
   rig, selectType, departPress, pickTrain, onTap, boarded, blocks,
   buildTrain, layoutStraight, envMaps, CAR_GAP, DECK,
-  setNight(v) { isNight = v; nightBlend = v ? 1 : 0; },
-  set night(v) { isNight = v; },
+  setNight(v) { tod = v ? 2 : 0; nightBlend = v ? 1 : 0; duskBlend = 0; },
+  setTod(v) { tod = v; nightBlend = v === 2 ? 1 : 0; duskBlend = v === 1 ? 1 : 0; },
+  set night(v) { tod = v ? 2 : 0; },
+  set tod(v) { tod = v; },
+  get duskBlend() { return duskBlend; },
+  skyGroup, trainProbe: () => trainProbe,
   get nightBlend() { return nightBlend; },
   dayNight(dt) { updateDayNight(dt); },
 };
