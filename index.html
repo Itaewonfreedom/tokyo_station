@@ -418,7 +418,7 @@ const _edgeTab = (() => {
     let lo = 1e9, hi = -1e9;
     for (const l of Object.keys(LINES)) {
       const [a, b] = lineSpan(l);
-      if (z < a - 24 || z > b + 24) continue;       // viaduct runs a little past a buffer
+      if (z < a - 8 || z > b + 8) continue;         // viaduct ends just past a buffer
       const x = lineXAt(l, Math.min(b, Math.max(a, z)));
       lo = Math.min(lo, x); hi = Math.max(hi, x);
     }
@@ -1624,13 +1624,45 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null)
   // wide so the yard reads as a near-solid deck with slim track slits.
   // canopy: raised with the platform (≈3.4m clear above it) and trimmed
   // back so its eaves stay clear of the pantographs over the tracks
-  const HW = 3.55, EAVE = PLAT_Y + 3.45, RIDGE = PLAT_Y + 4.15;
+  // canopy: raised with the platform (≈3.4m clear above it); the eaves
+  // reach out over the car roofs but stay inside the contact wires
+  const HW = 4.0, EAVE = PLAT_Y + 3.45, RIDGE = PLAT_Y + 4.15;
   const archProfile = [
     [-HW, EAVE], [-HW * 0.5, (EAVE + RIDGE) / 2 + 0.08], [0, RIDGE],
     [HW * 0.5, (EAVE + RIDGE) / 2 + 0.08], [HW, EAVE],
   ];
   const eaveProfile = [[-HW, EAVE], [-HW, EAVE - 0.35]];   // thin fascia
   const eaveProfileR = [[HW, EAVE], [HW, EAVE - 0.35]];
+  /* roof skins as the satellite photo shows them (u across the roof,
+     v along it, 1 unit = 4m): panel seams every ~6m and a ridge line
+     on the steel roofs, a grid of solar panels on 7・8, broad white
+     membrane panels with a spine on the Shinkansen roofs */
+  const roofSkin = kind => {
+    const c = document.createElement('canvas'); c.width = 64; c.height = 128;
+    const g = c.getContext('2d');
+    if (kind === 'solar') {
+      g.fillStyle = '#23283a'; g.fillRect(0, 0, 64, 128);
+      g.fillStyle = '#3a4466';
+      for (let y = 2; y < 128; y += 16) for (let x = 3; x < 32; x += 13) { g.fillRect(x, y, 11, 14); g.fillRect(63 - x - 11, y, 11, 14); }
+      g.fillStyle = '#b9bcc2'; g.fillRect(30, 0, 4, 128);
+    } else if (kind === 'shink') {
+      g.fillStyle = '#fff'; g.fillRect(0, 0, 64, 128);
+      g.fillStyle = 'rgba(0,0,0,.07)'; for (let y = 0; y < 128; y += 32) g.fillRect(0, y, 64, 2);
+      g.fillStyle = 'rgba(0,0,0,.28)'; g.fillRect(29, 0, 6, 128);
+      g.fillStyle = 'rgba(0,0,0,.1)'; g.fillRect(0, 0, 3, 128); g.fillRect(61, 0, 3, 128);
+    } else {
+      g.fillStyle = '#fff'; g.fillRect(0, 0, 64, 128);
+      g.fillStyle = 'rgba(0,0,0,.13)'; for (let y = 0; y < 128; y += 21) g.fillRect(0, y, 64, 2);
+      g.fillStyle = 'rgba(0,0,0,.05)'; for (let x = 8; x < 64; x += 8) g.fillRect(x, 0, 1, 128);
+      g.fillStyle = 'rgba(0,0,0,.22)'; g.fillRect(31, 0, 2, 128);
+    }
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace; t.wrapS = THREE.ClampToEdgeWrapping; t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(1, 0.5); t.anisotropy = 4;
+    return t;
+  };
+  const skins = { steel: roofSkin('steel'), solar: roofSkin('solar'), shink: roofSkin('shink') };
+  const roofKind = i => i === 3 ? 'solar' : i >= 5 ? 'shink' : 'steel';
   const deckProfile = [[-2.6, 0], [-2.6, PLAT_Y], [2.6, PLAT_Y], [2.6, 0]];
   const pillarGeo = new THREE.CylinderGeometry(0.13, 0.13, EAVE + 0.35 - PLAT_Y, 8);
   const pillarMat = new THREE.MeshStandardMaterial({ color: 0x5e6a72, roughness: 0.6, metalness: 0.4 });
@@ -1648,20 +1680,24 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null)
   let pi = 0;
   PLATFORMS.forEach(({ x, len, off, bw }, i) => {
     const zP0 = off - len / 2, zP1 = off + len / 2;
-    // taper to a slim point over each platform's last 45m
+    // taper to a slim point over each platform's last 45m (the canopy
+    // ends are sharper than the platforms, like the photo)
     const taper = z => 1 - 0.7 * smooth(Math.min(1, Math.max(0, (Math.abs(z - off) - (len / 2 - 45)) / 45)));
+    const roofTaper = z => 1 - 0.86 * smooth(Math.min(1, Math.max(0, (Math.abs(z - off) - (len / 2 - 55)) / 57)));
     const cx = z => x + bendFor(bw, z);  // platforms follow their group's curve
     platBits.push(sweepProfile(cx, zP0, zP1, deckProfile, platMat, 0.25, taper));
     // a little self-light so the underside (what you see from the
     // platform) reads as a pale canopy, not a muddy brown ceiling
+    const kind = roofKind(i);
     const archMat = new THREE.MeshStandardMaterial({
-      color: roofColors[i % roofColors.length], roughness: 0.65, side: THREE.DoubleSide,
+      color: kind === 'solar' ? 0xffffff : roofColors[i % roofColors.length], map: skins[kind],
+      roughness: kind === 'solar' ? 0.35 : 0.65, metalness: kind === 'solar' ? 0.3 : 0, side: THREE.DoubleSide,
       emissive: roofColors[i % roofColors.length], emissiveIntensity: 0.12 });
-    const roof = sweepProfile(cx, zP0 - 2, zP1 + 2, archProfile, archMat, 0.25, taper);
+    const roof = sweepProfile(cx, zP0 - 2, zP1 + 2, archProfile, archMat, 0.25, roofTaper);
     registerFadeable(roof);
     platBits.push(
-      sweepProfile(cx, zP0 - 2, zP1 + 2, eaveProfile, fasciaMat, 0.25, taper),
-      sweepProfile(cx, zP0 - 2, zP1 + 2, eaveProfileR, fasciaMat, 0.25, taper),
+      sweepProfile(cx, zP0 - 2, zP1 + 2, eaveProfile, fasciaMat, 0.25, roofTaper),
+      sweepProfile(cx, zP0 - 2, zP1 + 2, eaveProfileR, fasciaMat, 0.25, roofTaper),
       sweepProfile(cx, zP0 + 6, zP1 - 6, [[0.22, EAVE - 0.12], [-0.22, EAVE - 0.12]], roofLightMat),
       sweepProfile(cx, zP0, zP1, [[-2.45, PLAT_Y + 0.015], [-2.15, PLAT_Y + 0.015]], yellowMat, 0.25, taper),
       sweepProfile(cx, zP0, zP1, [[2.15, PLAT_Y + 0.015], [2.45, PLAT_Y + 0.015]], yellowMat, 0.25, taper));
@@ -1673,6 +1709,13 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null)
       pillarFeet.push(new THREE.Matrix4().makeTranslation(cx(z), DECK + PLAT_Y + 0.006, z));
     }
   });
+  // the white box that sits on the Chuo island's roof mid-station
+  {
+    const p = PLATFORMS[0], g = new THREE.BoxGeometry(2 * HW - 0.6, 1.7, 22);
+    g.translate(p.x + bendFor(p.bw, -4), DECK + RIDGE + 0.8, -4);
+    const box = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0xf1f1ee, roughness: 0.6 }));
+    box.castShadow = true; scene.add(box); platBits.push(box);
+  }
   pillars.instanceMatrix.needsUpdate = true;
   pillars.castShadow = true;
   scene.add(pillars);
@@ -2535,20 +2578,39 @@ const cityFar = new THREE.Group();
   lm({ name: 'Tokyo Building', kind: 'WE', gap: 18, w: 60, y0: 1630, y1: 1810, h: 164, style: 0, taper: true, heli: true });
   lm({ name: 'Marunouchi Park Building', kind: 'WE', gap: 18, w: 64, y0: 1830, y1: 2040, h: 157, style: 0, heli: true });
   // Yaesu (east)
-  lm({ name: 'Tekko Building', kind: 'EE', gap: 3, w: 48, y0: 150, y1: 360, h: 125, style: 2 });
-  lm({ name: 'Yaesu north', kind: 'EE', gap: 3, w: 38, y0: 360, y1: 600, h: 34, style: 2 });
   lm({ name: 'Yaesu courtyard', kind: 'EE', gap: 44, w: 38, y0: 365, y1: 530, h: 62, style: 1 });
   lm({ name: 'Yaesu tower', kind: 'EE', gap: 88, w: 44, y0: 425, y1: 690, h: 150, style: 0, heli: true });
-  lm({ name: 'GranTokyo North Tower', kind: 'EE', gap: 3, w: 64, y0: 680, y1: 990, h: 205, style: 0, heli: true });
-  lm({ name: 'GranTokyo South Tower', kind: 'EE', gap: 3, w: 52, y0: 1520, y1: 1830, h: 205, style: 0, heli: true });
-  lm({ name: 'Yaesu south', kind: 'EE', gap: 3, w: 44, y0: 1840, y1: 2010, h: 120, style: 1, heli: true });
+  /* ---- the Yaesu side: one continuous, asymmetric station frontage
+     standing right against the viaduct (its footprint follows the
+     corridor edge, so it even steps round the Shinkansen buffers):
+     Tekko Building → low Yaesu-north station block (backing onto the
+     Tokaido Shinkansen track ends) → GranTokyo North (Daimaru podium,
+     tower set back) → the curved GranRoof → GranTokyo South → Yaesu south */
+  const hug = [];
+  const hugX = z => corridorEdges(z).right + 0.4;
+  const hugB = (name, y0, y1, w, h, style, o = {}) => {
+    const z0 = zOf(y0), z1 = zOf(y1);
+    let xMax = -1e9, xMin = 1e9;
+    for (let z = z0; z <= z1; z += 2) { xMax = Math.max(xMax, hugX(z)); xMin = Math.min(xMin, hugX(z)); }
+    const b = { name, z0, z1, w, h, style, ...o, x0: xMin, x1: (o.follow ? xMax : xMax) + w };
+    hug.push(b);
+    return b;
+  };
+  hugB('Tekko Building', 150, 360, 48, 125, 2, { plant: true });
+  hugB('Yaesu north station block', 360, 690, 42, 32, 0, { plant: true });
+  const GTN = hugB('GranTokyo North podium', 690, 990, 64, 46, 1);
+  hugB('GranTokyo South Tower', 1520, 1835, 52, 205, 0, { heli: true, sail: true });
+  hugB('Yaesu south', 1835, 2010, 44, 120, 1, { heli: true });
   // the GranRoof: a white pleated membrane on a low glass deck between
-  // the two GranTokyo towers, along the Yaesu side of the tracks
-  const GR = { z0: zOf(1000), z1: zOf(1515) }; GR.x0 = edgeR(GR.z0, GR.z1) + 3; GR.x1 = GR.x0 + 30;
+  // the two GranTokyo towers, following the curve of the tracks
+  const GR = { z0: zOf(990), z1: zOf(1520), w: 30 };
+  GR.x0 = 1e9; GR.x1 = -1e9;
+  for (let z = GR.z0; z <= GR.z1; z += 2) { GR.x0 = Math.min(GR.x0, hugX(z)); GR.x1 = Math.max(GR.x1, hugX(z) + GR.w); }
   // the Yaesu redevelopment site south-east (bare ground and cranes)
   const SITE = { z0: zOf(1550), z1: zOf(2020) }; SITE.x0 = edgeR(SITE.z0, SITE.z1) + 60; SITE.x1 = SITE.x0 + 80;
   const blocked = [
     ...LM.map(b => [b.x0, b.x1, b.z0, b.z1]),
+    ...hug.map(b => [b.x0, b.x1, b.z0, b.z1]),
     [GR.x0, GR.x1, GR.z0, GR.z1], [SITE.x0, SITE.x1, SITE.z0, SITE.z1],
     [PLAZA.x0 - 4, -50, PLAZA.z0 - 4, PLAZA.z1 + 4],                   // plaza + brick station
     [PLAZA.x0 - 130, PLAZA.x0, -9, 9],                                 // the axis avenue
@@ -2592,6 +2654,70 @@ const cityFar = new THREE.Group();
     }
   }
 
+  // the Yaesu frontage: extruded footprints hugging the viaduct
+  function hugMesh(b, style) {
+    const n = Math.max(2, Math.ceil((b.z1 - b.z0) / 3)), west = [];
+    for (let i = 0; i <= n; i++) { const z = b.z0 + (b.z1 - b.z0) * i / n; west.push([hugX(z), z]); }
+    const east = b.follow ? west.map(([x, z]) => [x + b.w, z]).reverse() : [[b.x1, b.z1], [b.x1, b.z0]];
+    const all = west.concat(east), shape = new THREE.Shape();
+    shape.moveTo(all[0][0], -all[0][1]);
+    for (let i = 1; i < all.length; i++) shape.lineTo(all[i][0], -all[i][1]);
+    let g = new THREE.ExtrudeGeometry(shape, { depth: b.h, bevelEnabled: false, curveSegments: 1 });
+    g.rotateX(-Math.PI / 2);
+    const uv = g.attributes.uv, cap = g.groups[0];
+    for (let i = cap.start; i < cap.start + cap.count; i++) uv.setXY(i, 0.05, -0.06);   // plain roof
+    g.clearGroups();
+    const parts = [g];
+    if (b.plant) {                                    // rooftop plant on the low blocks
+      const xc = (Math.max(...west.map(p => p[0])) + b.x1) / 2, zc = (b.z0 + b.z1) / 2;
+      for (const [dx, dz, sx, sz, sy] of [[-4, -8, 12, 10, 4], [6, 10, 9, 14, 3], [0, 26, 8, 8, 5]])
+        if (Math.abs(dz) < (b.z1 - b.z0) / 2 - 6)
+          parts.push(plainAll(new THREE.BoxGeometry(sx, sy, sz)).translate(xc + dx, b.h + sy / 2, zc + dz).toNonIndexed());
+    }
+    if (parts.length > 1) g = BufferGeometryUtils.mergeGeometries(parts);
+    const mat = cityWindowMaterial(style, { roughness: style === 0 ? 0.35 : 0.7, metalness: style === 0 ? 0.4 : 0.1 });
+    setFacadeRepeat(mat, 1 / 14, -1 / 15);
+    cityMats.push(mat);
+    const m = new THREE.Mesh(g, mat);
+    m.castShadow = m.receiveShadow = true;
+    const grp = new THREE.Group(); grp.add(m);
+    cityNear.add(grp);
+    if (b.heli) {
+      const xs = Math.max(...west.map(p => p[0]));
+      heliPads.push([(xs + b.x1) / 2, b.h + 0.02, (b.z0 + b.z1) / 2, Math.min(b.x1 - xs, b.z1 - b.z0) * 0.6]);
+    }
+    return m;
+  }
+  for (const b of hug) hugMesh(b, b.style);
+  // GranTokyo North: the Daimaru podium runs along the tracks, the tower
+  // stands on its far (east) side
+  {
+    const w = 44, x1 = GTN.x1 - 1, x0 = x1 - w, z0 = GTN.z0 + 5, z1 = GTN.z1 - 5;
+    cityNear.add(makeBuilding((x0 + x1) / 2, (z0 + z1) / 2, w, z1 - z0, 205, false, 0, true));
+    heliPads.push([(x0 + x1) / 2, 205.02, (z0 + z1) / 2, Math.min(w, z1 - z0) * 0.62]);
+  }
+  // GranRoof: glass deck + white folded membrane, both following the curve
+  {
+    hugMesh({ z0: GR.z0, z1: GR.z1, w: GR.w * 0.72, h: 12, follow: true }, 0);
+    const len = GR.z1 - GR.z0, n = Math.round(len / 9), folds = [], mastGeo = [];
+    for (let i = 0; i < n; i++) {
+      const zc = GR.z0 + (i + 0.5) * len / n, xc = hugX(zc) + GR.w / 2;
+      const ang = Math.atan2(hugX(zc + 1) - hugX(zc - 1), 2);
+      for (const s of [-1, 1]) {
+        const g = new THREE.BoxGeometry(GR.w, 0.35, len / n / 2 / Math.cos(0.3) + 0.2);
+        g.rotateX(s * 0.3); g.translate(0, 0, s * len / n / 4); g.rotateY(ang);
+        g.translate(xc, 27 + 1.3, zc);
+        folds.push(g);
+      }
+      if (i % 2 === 0) for (const dx of [2, GR.w - 2])
+        mastGeo.push(new THREE.CylinderGeometry(0.35, 0.35, 27, 8).translate(hugX(zc) + dx, 13.5, zc));
+    }
+    const membrane = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(folds), new THREE.MeshStandardMaterial({ color: 0xf4f4f0, roughness: 0.55, side: THREE.DoubleSide }));
+    membrane.castShadow = membrane.receiveShadow = true;
+    cityNear.add(membrane);
+    cityNear.add(new THREE.Mesh(BufferGeometryUtils.mergeGeometries(mastGeo), new THREE.MeshStandardMaterial({ color: 0xd8d8d4, roughness: 0.5, metalness: 0.3 })));
+  }
+
   // rooftop helipads (green squares with a white H): two draw calls
   {
     const pads = [], marks = [];
@@ -2606,34 +2732,6 @@ const cityFar = new THREE.Group();
     pm.receiveShadow = true;
     pm.userData.noFade = mm.userData.noFade = true;   // spread over the whole city
     cityNear.add(pm, mm);
-  }
-
-  // GranRoof: glass deck + white folded membrane
-  {
-    const len = GR.z1 - GR.z0, w = GR.x1 - GR.x0, xc = (GR.x0 + GR.x1) / 2;
-    const deckMat = cityWindowMaterial(0, { roughness: 0.3, metalness: 0.4 });
-    setFacadeRepeat(deckMat, Math.max(1, len / 26 | 0), 1);
-    cityMats.push(deckMat);
-    const deck = new THREE.Mesh(plainTop(new THREE.BoxGeometry(w * 0.7, 12, len)), deckMat);
-    deck.position.set(xc - w * 0.12, 6, (GR.z0 + GR.z1) / 2); deck.castShadow = deck.receiveShadow = true;
-    cityNear.add(deck);
-    const folds = [], n = Math.round(len / 9);
-    for (let i = 0; i < n; i++) {
-      const zc = GR.z0 + (i + 0.5) * len / n;
-      for (const s of [-1, 1]) {
-        const g = new THREE.BoxGeometry(w, 0.35, len / n / 2 / Math.cos(0.3) + 0.2);
-        g.rotateX(s * 0.3); g.translate(xc, 27 + 1.3, zc + s * len / n / 4);
-        folds.push(g);
-      }
-    }
-    const membrane = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(folds), new THREE.MeshStandardMaterial({ color: 0xf4f4f0, roughness: 0.55, side: THREE.DoubleSide }));
-    membrane.castShadow = membrane.receiveShadow = true;
-    cityNear.add(membrane);
-    const mastGeo = [];
-    for (let i = 0; i <= n; i += 2) for (const dx of [-w / 2 + 2, w / 2 - 2])
-      mastGeo.push(new THREE.CylinderGeometry(0.35, 0.35, 27, 8).translate(xc + dx, 13.5, GR.z0 + i * len / n));
-    const masts = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(mastGeo), new THREE.MeshStandardMaterial({ color: 0xd8d8d4, roughness: 0.5, metalness: 0.3 }));
-    cityNear.add(masts);
   }
 
   // Yaesu redevelopment site: bare ground, site huts, two tower cranes
