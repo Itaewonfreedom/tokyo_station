@@ -460,16 +460,6 @@ const platformTex = canvasTex(256, 256, (g, w, h) => {
   for (let y = 0; y <= h; y += 64) { g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke(); }
 }, 1, 40);
 
-const brickTex = canvasTex(256, 256, (g, w, h) => {
-  g.fillStyle = '#8c3a2b'; g.fillRect(0, 0, w, h);
-  const bh = 16, bw = 32;
-  for (let y = 0; y < h / bh; y++)
-    for (let x = -1; x < w / bw + 1; x++) {
-      const off = (y % 2) * bw / 2, s = 0.85 + Math.random() * 0.3;
-      g.fillStyle = `rgb(${145*s|0},${62*s|0},${45*s|0})`;
-      g.fillRect(x * bw + off + 1, y * bh + 1, bw - 2, bh - 2);
-    }
-}, 14, 3);
 
 /* ---------- facade styles for the city generator ---------- */
 function facadeTex(style, lit) {
@@ -939,7 +929,7 @@ vec3 stationIrr(vec3 pv, vec3 nv) {
   acc += shed * 0.11 * (0.55 + 0.45 * max(n.y, 0.));
   vec3 c = vec3(1.0, 0.80, 0.56) * acc * 5.0;
   // floodlit Marunouchi facade (west faces of the brick station)
-  float fx = step(-78., p.x) * step(p.x, -54.) * (1. - smoothstep(118., 128., abs(z)));
+  float fx = step(-78., p.x) * step(p.x, -54.) * (1. - smoothstep(126., 136., abs(z)));
   c += vec3(1.0, 0.74, 0.46) * fx * max(-n.x, 0.) * (0.5 + 0.5 * clamp(1. - p.y / 26., 0., 1.)) * 1.6;
   return c * uNight;
 }
@@ -2046,211 +2036,282 @@ const SIG_OFF = new THREE.Color(0x1c0f0f), SIG_RED = new THREE.Color(0xff2a1e), 
 }
 
 /* ================================================================
-   Marunouchi red-brick station building (1914 / 2012 restoration):
-   3-storey brick facade with stone string courses and arched windows,
-   a projecting central pavilion with a gable, and the two iconic
-   octagonal slate domes with dormers, lanterns and finials.
+   Marunouchi red-brick station building (1914 / 2012 restoration),
+   after photographs of the restored building:
+   - 3 storeys of red brick with white stone lines both ways (辰野式):
+     a granite plinth, white stripes across the ground floor, white
+     bands at every floor line, white-quoined pilasters between the
+     bays and white-framed windows (arched on the ground floor)
+   - a steep black slate roof with a row of small dormers, copper ridge
+   - a big slate pavilion roof over the centre, a tall arched bay with a
+     round window, two white turrets with small domes beside it
+   - pyramid-roofed towers half way out, low end pavilions
+   - the north and south domes: arched windows round the drum, a near-
+     hemispherical slate dome with copper ribs, a ring of round copper
+     dormers, a lantern and a tall spire (≈ 45 m, the real 46 m)
+   The walls are one procedural shader (bricks, bands, windows, lit
+   rooms at night) in station coordinates, so no texture stretches.
+   Horizontal length is compressed with the rest of the station
+   (≈ 250 m for the real 335 m); heights are real.
 ================================================================ */
+const FACADE_GLSL = `
+varying vec3 vOP;
+varying vec3 vON;
+float fcH(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float fcA(float e, float x) { float w = max(fwidth(x) * 0.75, 1e-4); return smoothstep(e - w, e + w, x); }
+`;
+function facadeMaterial(windows) {
+  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85, emissive: 0xffc680, emissiveIntensity: 0 });
+  if (windows) m.defines = { FACADE_WIN: '' };
+  m.onBeforeCompile = shader => {
+    patchStation(shader);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vOP;\nvarying vec3 vON;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvOP = position; vON = normal;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\n' + FACADE_GLSL)
+      .replace('#include <map_fragment>', `#include <map_fragment>
+  const vec3 BRICK = vec3(0.40, 0.088, 0.046), STONE = vec3(0.80, 0.75, 0.64),
+             GRANITE = vec3(0.60, 0.56, 0.49), MORTAR = vec3(0.52, 0.49, 0.44), GLASS = vec3(0.045, 0.052, 0.06);
+  const float P = ${STATION_BAY.toFixed(2)};
+  vec3 on = normalize(vON);
+  float fu = abs(on.x) > abs(on.z) ? vOP.z : vOP.x, fy = vOP.y;
+  float vert = 1. - step(0.5, abs(on.y));
+  // bricks (mortar and per-brick tint fade out with distance: no shimmer)
+  float row = floor(fy / 0.15), bu = fu / 0.36 + 0.5 * mod(row, 2.);
+  vec2 fw = fwidth(vec2(bu, fy / 0.15));
+  float far = smoothstep(0.3, 0.7, max(fw.x, fw.y));
+  vec2 bf = vec2(fract(bu), fract(fy / 0.15));
+  float mort = max(1. - smoothstep(0.02, 0.02 + 1.5 * fw.x, min(bf.x, 1. - bf.x)),
+                   1. - smoothstep(0.04, 0.04 + 1.5 * fw.y, min(bf.y, 1. - bf.y)));
+  vec3 col = BRICK * (0.82 + 0.36 * mix(fcH(vec2(floor(bu), row)), 0.5, far));
+  col = mix(col, MORTAR * 0.8, mort * 0.45 * (1. - far));
+  // storeys: 5.1 m from the plinth
+  float lf = fy - 0.9, fl = floor(lf / 5.1), ly = lf - fl * 5.1;
+  float du = fu - P * floor(fu / P + 0.5);              // from the bay centre
+  float st = 1. - fcA(0.9, fy);                          // granite plinth
+  float band = fcA(4.68, ly);                            // floor-line band
+  float stripe = (1. - step(0.5, fl)) * fcA(0.74, fract(ly / 0.86)) * (1. - band);
+  float pil = 0.;
+#ifdef FACADE_WIN
+  // white-quoined pilasters between the bays
+  pil = fcA(P * 0.5 - 0.3, abs(du)) * step(0.5, fl) * fcA(0.55, fract(fy / 0.9));
+#endif
+  float white = max(max(band, stripe), pil);
+  col = mix(col, STONE * (0.94 + 0.06 * fcH(vec2(floor(fu / 0.9), floor(fy / 0.45)))), white * vert);
+  col = mix(col, GRANITE, st);
+  float fcGlass = 0., fcLit = 0.;
+#ifdef FACADE_WIN
+  // one window per bay and storey: arched on the ground floor
+  float hw = fl < 0.5 ? 0.72 : 0.6;
+  float y0 = fl < 0.5 ? 0.75 : fl < 1.5 ? 0.85 : 0.8, y1 = fl < 0.5 ? 3.95 : fl < 1.5 ? 3.95 : fl < 2.5 ? 3.55 : 3.2;
+  float ax = abs(du);
+  float body = (1. - fcA(hw, ax)) * fcA(y0, ly) * (1. - fcA(fl < 0.5 ? y1 - hw : y1, ly));
+  float arch = fl < 0.5 ? (1. - fcA(hw, length(vec2(du, max(ly - (y1 - hw), 0.))))) * fcA(y1 - hw, ly) : 0.;
+  float glass = max(body, arch);
+  float fb = 0.16;
+  float fbody = (1. - fcA(hw + fb, ax)) * fcA(y0 - fb, ly) * (1. - fcA((fl < 0.5 ? y1 - hw : y1) + (fl < 0.5 ? 0. : 0.38), ly));
+  float farch = fl < 0.5 ? (1. - fcA(hw + fb, length(vec2(du, max(ly - (y1 - hw), 0.))))) * fcA(y1 - hw, ly) : 0.;
+  float frame = max(fbody, farch) * (1. - glass);
+  // glazing bars: a centre mullion and a transom
+  float bars = (1. - fcA(0.045, ax)) + (1. - fcA(0.045, abs(ly - mix(y0, y1, 0.64))));
+  glass *= vert * (1. - clamp(bars, 0., 1.) * (1. - far));
+  frame *= vert;
+  col = mix(col, STONE, frame);
+  col = mix(col, GLASS, glass);
+  fcGlass = glass;
+  vec2 wid = vec2(floor(fu / P + 0.5), fl + floor(on.x * 2. + on.z * 5.) * 13.);
+  fcLit = glass * step(0.28, fcH(wid)) * (0.55 + 0.45 * fcH(wid + 3.1)) * (0.85 + 0.15 * smoothstep(y1, y0, ly));
+#endif
+  diffuseColor.rgb = col;`)
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n\troughnessFactor = mix(0.86, 0.1, fcGlass);')
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n\ttotalEmissiveRadiance *= fcLit;');
+  };
+  return m;
+}
+const STATION_BAY = 3.4;
 const station = new THREE.Group();
 {
+  const P = STATION_BAY;
   const glowMats = [];
   station.userData.glowMats = glowMats;
+  const facW = facadeMaterial(true), facP = facadeMaterial(false);
+  glowMats.push(facW);
+  const stoneMat = new THREE.MeshStandardMaterial({ color: 0xe6dfd0, roughness: 0.8 });
+  const slateMat = new THREE.MeshStandardMaterial({ color: 0x3b3e45, roughness: 0.74, metalness: 0.05 });
+  const copperMat = new THREE.MeshStandardMaterial({ color: 0x6b9c89, roughness: 0.5, metalness: 0.35 });
+  const ironMat = new THREE.MeshStandardMaterial({ color: 0x2a2d32, roughness: 0.6, metalness: 0.3 });
+  const winGlass = new THREE.MeshStandardMaterial({ color: 0x14161a, roughness: 0.12, emissive: 0xffc680, emissiveIntensity: 0 });
+  glowMats.push(winGlass);
 
-  // ---- procedural facade: one repeating bay, baked storey-by-storey
-  function brickFill(g, x0, y0, w, h, base) {
-    const bh = 7, bw = 15;
-    for (let y = y0; y < y0 + h; y += bh)
-      for (let x = x0 - bw; x < x0 + w; x += bw) {
-        const off = (Math.round((y - y0) / bh) % 2) * bw / 2;
-        const s = 0.82 + Math.random() * 0.32;
-        g.fillStyle = `rgb(${base[0]*s|0},${base[1]*s|0},${base[2]*s|0})`;
-        g.fillRect(Math.max(x0, x + off) + 0.5, y + 0.5, bw - 1.5, bh - 1.5);
+  const add = (geo, mat, x, y, z, cast = true) => {
+    const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z);
+    m.castShadow = cast; m.receiveShadow = true; station.add(m); return m;
+  };
+  const box = (w, h, d, mat, x, y, z, cast) => add(new THREE.BoxGeometry(w, h, d), mat, x, y, z, cast);
+  // an axis-aligned block from x0..x1 / z0..z1, standing on the ground
+  const block = (x0, x1, z0, z1, h, mat = facW) => box(x1 - x0, h, z1 - z0, mat, (x0 + x1) / 2, h / 2, (z0 + z1) / 2);
+  // hipped / pyramid roof: a box whose top face is pulled in by ix, iz
+  function roof(x0, x1, z0, z1, y0, h, ix, iz, mat = slateMat) {
+    const g = new THREE.BoxGeometry(x1 - x0, h, z1 - z0), p = g.attributes.position;
+    for (let i = 0; i < p.count; i++) if (p.getY(i) > 0) {
+      const x = p.getX(i), z = p.getZ(i);
+      p.setX(i, Math.sign(x) * Math.max(Math.abs(x) - ix, 0.02));
+      p.setZ(i, Math.sign(z) * Math.max(Math.abs(z) - iz, 0.02));
+    }
+    g.computeVertexNormals();
+    return add(g, mat, (x0 + x1) / 2, y0 + h / 2, (z0 + z1) / 2);
+  }
+  // white cornice + dark eaves railing round the top of a block
+  function cornice(x0, x1, z0, z1, y) {
+    box(x1 - x0 + 0.7, 0.8, z1 - z0 + 0.7, stoneMat, (x0 + x1) / 2, y + 0.4, (z0 + z1) / 2);
+    box(x1 - x0 + 0.5, 0.35, z1 - z0 + 0.5, ironMat, (x0 + x1) / 2, y + 0.97, (z0 + z1) / 2);
+  }
+  // white stone quoins up the corners of a projecting block
+  function quoins(x0, x1, z0, z1, h) {
+    for (const x of [x0, x1]) for (const z of [z0, z1]) box(0.75, h - 0.9, 0.75, stoneMat, x, 0.9 + (h - 0.9) / 2, z);
+  }
+  // roof dormer facing ±x (or ±z with alongZ)
+  function dormer(x, y, z, sx, sz = 0) {
+    const ax = sz === 0;
+    box(ax ? 1.4 : 1.2, 1.5, ax ? 1.2 : 1.4, stoneMat, x, y, z);
+    box(ax ? 0.06 : 0.7, 0.9, ax ? 0.7 : 0.06, winGlass, x + sx * 0.72, y - 0.1, z + sz * 0.72);
+    if (ax) roof(x - 0.8, x + 0.8, z - 0.72, z + 0.72, y + 0.75, 0.62, 0, 0.7);
+    else roof(x - 0.72, x + 0.72, z - 0.8, z + 0.8, y + 0.75, 0.62, 0.7, 0);
+  }
+  // a dark window (lit at night) set in a stone surround on a face ±x
+  function stoneWindow(x, y, z, w, h, sx) {
+    box(0.3, h + 0.5, w + 0.5, stoneMat, x + sx * 0.12, y, z);
+    box(0.06, h, w, winGlass, x + sx * 0.3, y, z);
+  }
+  // round window with a copper ring, facing the unit vector n
+  const ringGeo = new THREE.TorusGeometry(0.55, 0.13, 6, 16), discGeo = new THREE.CircleGeometry(0.5, 16);
+  function roundWindow(x, y, z, n, s = 1) {
+    const r = add(ringGeo, copperMat, x, y, z); r.scale.setScalar(s);
+    const d = add(discGeo, winGlass, x + n.x * 0.05, y + n.y * 0.05, z + n.z * 0.05, false); d.scale.setScalar(s);
+    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
+    r.quaternion.copy(q); d.quaternion.copy(q);
+  }
+
+  const HL = 36.5 * P;                           // half length (window bays line up with every edge)
+  const WALL = 15.6, ROOF0 = WALL + 0.8;
+  // ---- long 3-storey wings with a steep slate roof ----
+  block(-8, 8, -HL, HL, WALL);
+  cornice(-8, 8, -HL, HL, WALL);
+  roof(-8.2, 8.2, -HL - 0.2, HL + 0.2, ROOF0 + 0.35, 6.6, 4.5, 4.5);
+  for (const x of [-3.7, 3.7]) box(0.28, 0.28, 2 * HL - 8.4, copperMat, x, ROOF0 + 7.0, 0, false);
+  const busy = [[0, 5.5 * P + 3], [14 * P, 1.5 * P + 2], [25 * P, 4.5 * P + 3], [35 * P, 1.5 * P + 2]];
+  for (let k = -35; k <= 35; k++) {
+    const z = k * P;
+    if (k % 2 || busy.some(([c, h]) => Math.abs(Math.abs(z) - c) < h)) continue;
+    for (const s of [-1, 1]) dormer(s * 6.55, ROOF0 + 2.6, z, s);
+  }
+
+  // ---- centre: big slate pavilion roof, tall arched bay, twin turrets ----
+  {
+    const z0 = -5.5 * P, z1 = 5.5 * P, x0 = -12, x1 = 9.2, H = 19.2;
+    block(x0, x1, z0, z1, H);
+    cornice(x0, x1, z0, z1, H);
+    quoins(x0, x1, z0, z1, H);
+    roof(x0 - 0.2, x1 + 0.2, z0 - 0.2, z1 + 0.2, H + 1.15, 11, 7.6, 7.2);
+    box(6.4, 0.5, 23.6, copperMat, (x0 + x1) / 2, H + 12.4, 0);          // crest
+    for (const z of [-2 * P, 0, 2 * P]) dormer(x0 + 2.2, H + 4.2, z, -1);
+    for (const z of [-2 * P, 2 * P]) dormer(x1 - 2.2, H + 4.2, z, 1);
+    // the arched central bay rising into the roof, a round window on top
+    for (const z of [-3.1, 3.1]) box(0.6, 20.2, 1.0, stoneMat, x0 - 0.3, 10.1, z);
+    add(new THREE.TorusGeometry(3.1, 0.5, 6, 20, Math.PI).rotateY(Math.PI / 2), stoneMat, x0 - 0.3, 20.2, 0);
+    box(0.4, 20.2, 5.2, facW, x0 - 0.2, 10.1, 0);
+    box(0.08, 10.5, 3.4, winGlass, x0 - 0.44, 11.8, 0);
+    add(new THREE.CylinderGeometry(1.7, 1.7, 0.08, 20, 1, false, 0, Math.PI).rotateZ(Math.PI / 2), winGlass, x0 - 0.44, 17.05, 0, false);
+    box(0.5, 0.6, 7.2, stoneMat, x0 - 0.3, 5.6, 0);
+    roundWindow(x0 - 0.62, 20.2, 0, new THREE.Vector3(-1, 0, 0), 2.1);
+    // turrets with small bell domes
+    const bell = new THREE.LatheGeometry([[1.7, 0], [1.65, 0.5], [1.4, 1.3], [0.9, 2.0], [0.35, 2.4], [0, 2.5]].map(([r, y]) => new THREE.Vector2(r, y)), 12);
+    for (const z of [-2.2 * P, 2.2 * P]) {
+      box(3, 24.4, 3, stoneMat, x0 - 0.4, 12.2, z);
+      for (const y of [8.2, 13.3, 18.4]) stoneWindow(x0 - 1.9, y, z, 1.1, 2.4, -1);
+      add(bell, slateMat, x0 - 0.4, 24.4, z);
+      add(new THREE.ConeGeometry(0.12, 2.2, 6), copperMat, x0 - 0.4, 28, z);
+    }
+    // the imperial porch
+    box(3.2, 4.4, 7.4, stoneMat, x0 - 1.6, 2.2, 0);
+    box(3.6, 0.5, 7.8, ironMat, x0 - 1.6, 4.6, 0);
+  }
+
+  // ---- towers half way out: white stone top storey, steep pyramid ----
+  for (const s of [-1, 1]) {
+    const zc = s * 14 * P, z0 = zc - 1.5 * P, z1 = zc + 1.5 * P, x0 = -10.2, x1 = 8.6;
+    block(x0, x1, z0, z1, WALL);
+    quoins(x0, x1, z0, z1, WALL);
+    box(x1 - x0 + 0.3, 4, z1 - z0 + 0.3, stoneMat, (x0 + x1) / 2, WALL + 2, zc);
+    for (const dz of [-P, 0, P]) { stoneWindow(x0 - 0.15, WALL + 2, zc + dz, 1.0, 2.2, -1); stoneWindow(x1 + 0.15, WALL + 2, zc + dz, 1.0, 2.2, 1); }
+    cornice(x0, x1, z0, z1, WALL + 4);
+    roof(x0 - 0.2, x1 + 0.2, z0 - 0.2, z1 + 0.2, WALL + 5.15, 9.5, (x1 - x0) / 2 - 0.3, (z1 - z0) / 2 - 0.3);
+    add(new THREE.ConeGeometry(0.16, 3, 6), copperMat, (x0 + x1) / 2, WALL + 16.1, zc);
+    for (const sx of [-1, 1]) dormer(sx < 0 ? x0 + 1.9 : x1 - 1.9, WALL + 7, zc, sx);
+  }
+
+  // ---- low end pavilions ----
+  for (const s of [-1, 1]) {
+    const zc = s * 35 * P, z0 = zc - 1.5 * P, z1 = zc + 1.5 * P, x0 = -9.4, x1 = 8.8, H = 17;
+    block(x0, x1, z0, z1, H);
+    quoins(x0, x1, z0, z1, H);
+    cornice(x0, x1, z0, z1, H);
+    roof(x0 - 0.2, x1 + 0.2, z0 - 0.2, z1 + 0.2, H + 1.15, 6.5, 5.5, 3.2);
+  }
+
+  // ---- north and south domes ----
+  const domeProf = [[11.0, 0], [11.3, 0.35], [10.9, 0.9], [10.5, 2.4], [9.7, 4.2], [8.3, 6.0], [6.3, 7.6], [3.9, 8.7], [1.9, 9.25], [0, 9.4]];
+  const domeGeo = new THREE.LatheGeometry(domeProf.map(([r, y]) => new THREE.Vector2(r, y)), 32);
+  const ribCurve = a => new THREE.CatmullRomCurve3(domeProf.slice(1, -1).map(([r, y]) => new THREE.Vector3(Math.sin(a) * (r + 0.05), y, Math.cos(a) * (r + 0.05))));
+  const ribGeos = [];
+  for (let i = 0; i < 8; i++) ribGeos.push(new THREE.TubeGeometry(ribCurve(i / 8 * Math.PI * 2 + Math.PI / 8), 14, 0.14, 4));
+  const ribGeo = BufferGeometryUtils.mergeGeometries(ribGeos);
+  for (const s of [-1, 1]) {
+    const zc = s * 25 * P, z0 = zc - 4.5 * P, z1 = zc + 4.5 * P, x0 = -13.6, x1 = 10.2, H = 20.4, xc = -1.7;
+    block(x0, x1, z0, z1, H);
+    quoins(x0, x1, z0, z1, H);
+    cornice(x0, x1, z0, z1, H);
+    // big arch with a round window on the park side
+    box(0.6, 17.5, 8.6, stoneMat, x0 - 0.3, 8.75, zc);
+    add(new THREE.CylinderGeometry(4.3, 4.3, 0.6, 20, 1, false, 0, Math.PI).rotateZ(Math.PI / 2), stoneMat, x0 - 0.3, 17.5, zc);
+    box(0.08, 12, 5, winGlass, x0 - 0.64, 6.5, zc);
+    roundWindow(x0 - 0.62, 15.6, zc, new THREE.Vector3(-1, 0, 0), 2.8);
+    // octagonal drum ringed with arched windows
+    roof(x0 - 0.2, x1 + 0.2, z0 - 0.2, z1 + 0.2, H + 1.15, 1.9, 1.3, 1.3);
+    const DR = 10.6, D0 = H + 1.15 + 1.7, DH = 4.2;
+    add(new THREE.CylinderGeometry(DR, DR, DH, 8).rotateY(Math.PI / 8), facP, xc, D0 + DH / 2, zc);
+    add(new THREE.CylinderGeometry(DR + 0.45, DR + 0.45, 0.6, 8).rotateY(Math.PI / 8), stoneMat, xc, D0 + DH + 0.3, zc);
+    const apo = DR * Math.cos(Math.PI / 8);
+    for (let i = 0; i < 8; i++) {
+      const a = i / 8 * Math.PI * 2, n = new THREE.Vector3(Math.sin(a), 0, Math.cos(a));
+      for (const off of [-1.9, 1.9]) {
+        const w = add(new THREE.BoxGeometry(1.25, 2.7, 0.3), stoneMat, xc + n.x * apo + n.z * off, D0 + 2.3, zc + n.z * apo - n.x * off);
+        const g = add(new THREE.BoxGeometry(0.95, 2.3, 0.06), winGlass, xc + n.x * (apo + 0.17) + n.z * off, D0 + 2.2, zc + n.z * (apo + 0.17) - n.x * off, false);
+        w.rotation.y = g.rotation.y = a;
       }
-  }
-  // canvas vertical layout maps to a 14m wall (canvas top = wall top)
-  function drawFacade(lit) {
-    const W = 96, H = 384;
-    const c = document.createElement('canvas'); c.width = W; c.height = H;
-    const g = c.getContext('2d');
-    const stone = '#e9e3d4', stoneSh = '#cfc7b4', glass = lit ? '#ffd89a' : '#20262e';
-    const brick = [150, 66, 52];
-    if (lit) { g.fillStyle = '#000'; g.fillRect(0, 0, W, H); }
-    else {
-      // base masonry
-      g.fillStyle = stone; g.fillRect(0, 285, W, H - 285);
-      for (let y = 290; y < H; y += 13) { g.strokeStyle = stoneSh; g.lineWidth = 1; g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke(); }
-      brickFill(g, 0, 54, W, 220, brick);             // floors 2-3 brick
-      g.fillStyle = stone; g.fillRect(0, 274, W, 11); g.fillRect(0, 164, W, 11);  // string courses
-      // cornice with dentils
-      g.fillStyle = stone; g.fillRect(0, 0, W, 54);
-      g.fillStyle = stoneSh; for (let x = 4; x < W; x += 12) g.fillRect(x, 30, 6, 14);
-      g.fillStyle = '#d8d0bd'; g.fillRect(0, 48, W, 6);
+      const ca = a + Math.PI / 8, cr = DR * 0.98;
+      const pl = add(new THREE.BoxGeometry(0.45, DH, 0.45), stoneMat, xc + Math.sin(ca) * cr, D0 + DH / 2, zc + Math.cos(ca) * cr);
+      pl.rotation.y = ca;
     }
-    // windows per bay
-    const winCol = (yTop, yBot, arched) => {
-      if (!lit) { g.fillStyle = stone; g.fillRect(26, yTop - 6, 44, yBot - yTop + 10); } // surround
-      g.fillStyle = glass;
-      if (arched) {
-        g.beginPath(); g.moveTo(30, yBot); g.lineTo(30, yTop + 12);
-        g.quadraticCurveTo(48, yTop - 8, 66, yTop + 12); g.lineTo(66, yBot); g.closePath(); g.fill();
-      } else g.fillRect(30, yTop, 36, yBot - yTop);
-      if (!lit) { g.strokeStyle = '#3a4450'; g.lineWidth = 1.5;   // mullions
-        g.beginPath(); g.moveTo(48, yTop); g.lineTo(48, yBot); g.stroke(); }
-    };
-    winCol(78, 150, true);    // 3rd floor arched
-    winCol(190, 256, false);  // 2nd floor rectangular
-    winCol(300, 366, true);   // ground arcade arches
-    return c;
-  }
-  const facadeDayC = drawFacade(false), facadeLitC = drawFacade(true);
-  function facadeMat(lenWorld) {
-    const bays = Math.max(1, Math.round(lenWorld / 4.0));
-    const mk = (cv, clampEmissive) => {
-      const t = new THREE.CanvasTexture(cv);
-      t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
-      t.wrapS = THREE.RepeatWrapping; t.wrapT = THREE.ClampToEdgeWrapping;
-      t.repeat.set(bays, 1);
-      return t;
-    };
-    const m = new THREE.MeshStandardMaterial({
-      map: mk(facadeDayC), emissiveMap: mk(facadeLitC),
-      emissive: 0xffca7a, emissiveIntensity: 0, roughness: 0.9,
-    });
-    glowMats.push(m);
-    return m;
-  }
-
-  const brickMat = new THREE.MeshStandardMaterial({ map: brickTex, roughness: 0.88 });
-  const stoneMat = new THREE.MeshStandardMaterial({ color: 0xe9e3d4, roughness: 0.85 });
-  const slateMat = new THREE.MeshStandardMaterial({ color: 0x40464d, roughness: 0.5, metalness: 0.25 });
-  const slateRib = new THREE.MeshStandardMaterial({ color: 0x6a7077, roughness: 0.5, metalness: 0.3 });
-  const copperMat = new THREE.MeshStandardMaterial({ color: 0x4a7d6e, roughness: 0.6, metalness: 0.4 });
-  const dormerGlass = new THREE.MeshStandardMaterial({ color: 0x1a1408, emissive: 0xffca7a, emissiveIntensity: 0 });
-  glowMats.push(dormerGlass);
-
-  function box(w, h, d, mat, x, y, z, parent = station) {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-    m.position.set(x, y, z); m.castShadow = m.receiveShadow = true;
-    parent.add(m); return m;
-  }
-  // a textured facade plane facing ±x (sign -1 = west/park side)
-  function facadeWall(x, z, len, sign) {
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(len, 14), facadeMat(len));
-    m.position.set(x, 7, z); m.rotation.y = sign < 0 ? -Math.PI / 2 : Math.PI / 2;
-    m.receiveShadow = true; station.add(m); return m;
-  }
-
-  const HALF = 7, LEN = 230, Zc = LEN / 2;
-  // core mass + stone base + brick body
-  box(14, 14, LEN, brickMat, 0, 7, 0);
-  box(15, 3.6, LEN + 0.4, stoneMat, 0, 1.8, 0);          // rusticated base
-  box(15.2, 1.4, LEN + 1, stoneMat, 0, 14.4, 0);          // main cornice
-  box(14.4, 1.6, LEN, slateMat, 0, 15.6, 0);              // roof band
-  // facade planes both long sides (west = grand front toward the park)
-  facadeWall(-HALF - 0.06, 0, LEN, -1);
-  facadeWall(HALF + 0.06, 0, LEN, 1);
-
-  // ---- central pavilion: taller, projecting west, with a stone attic
-  //      storey, balustrade parapet, a low hipped slate roof and an
-  //      elegant segmental relief gable on the grand west front ----
-  box(18, 17, 30, brickMat, -2, 8.5, 0);
-  box(19, 1.4, 31, stoneMat, -2, 17.5, 0);
-  facadeWall(-11.06, 0, 30, -1);
-  // raised stone attic storey
-  box(15.5, 4.2, 24, stoneMat, -2, 20.4, 0);
-  // balustrade parapet around the attic top
-  box(15.7, 0.9, 0.6, stoneMat, -2, 22.9, -12.3);
-  box(15.7, 0.9, 0.6, stoneMat, -2, 22.9, 12.3);
-  box(0.6, 0.9, 24, stoneMat, -9.6, 22.9, 0);
-  box(0.6, 0.9, 24, stoneMat, 5.6, 22.9, 0);
-  // corner pylons rising just above the roofline
-  for (const cx of [-9.5, 5.5]) for (const cz of [-12.2, 12.2])
-    box(1.4, 6.6, 1.4, stoneMat, cx, 21.6, cz);
-  // low, wide hipped slate roof (reads as a proper roof, not a spike)
-  const cRoof = new THREE.Mesh(new THREE.ConeGeometry(13.6, 4.4, 4), slateMat);
-  cRoof.rotation.y = Math.PI / 4; cRoof.position.set(-2, 25.0, 0); cRoof.castShadow = true;
-  station.add(cRoof);
-  // segmental (curved) relief gable on the west facade
-  const gShape = new THREE.Shape();
-  gShape.moveTo(-6.5, 0);
-  gShape.quadraticCurveTo(0, 4.6, 6.5, 0);
-  gShape.lineTo(-6.5, 0);
-  const gable = new THREE.Mesh(new THREE.ShapeGeometry(gShape),
-    new THREE.MeshStandardMaterial({ color: 0xe9e3d4, roughness: 0.85, side: THREE.DoubleSide }));
-  gable.rotation.y = -Math.PI / 2;
-  gable.position.set(-11.1, 18.2, 0);
-  station.add(gable);
-  // a stone clock disc set into the gable
-  const clockFace = new THREE.Mesh(new THREE.CircleGeometry(1.4, 24),
-    new THREE.MeshStandardMaterial({ color: 0xf3eee2, roughness: 0.8 }));
-  clockFace.rotation.y = -Math.PI / 2; clockFace.position.set(-11.2, 19.8, 0);
-  station.add(clockFace);
-  // 12 hour ticks + live hands (driven from the real clock in animate)
-  const tickMat = new THREE.MeshBasicMaterial({ color: 0x33312c });
-  for (let i = 0; i < 12; i++) {
-    const t = new THREE.Mesh(new THREE.BoxGeometry(i % 3 ? 0.05 : 0.09, 0.22, 0.04), tickMat);
-    const a = i / 12 * Math.PI * 2;
-    t.position.set(-11.24, 19.8 + Math.cos(a) * 1.15, Math.sin(a) * 1.15);
-    t.rotation.x = -a; station.add(t);
-  }
-  const clockHands = new THREE.Group();
-  clockHands.position.set(-11.27, 19.8, 0);
-  clockHands.rotation.y = -Math.PI / 2;        // lie in the clock-face plane
-  const handMat = new THREE.MeshBasicMaterial({ color: 0x2a2a2a });
-  function hand(len, w) {
-    const g = new THREE.BoxGeometry(w, len, 0.05); g.translate(0, len / 2, 0);
-    const m = new THREE.Mesh(g, handMat); clockHands.add(m); return m;
-  }
-  station.add(clockHands);
-  station.userData.clock = { hour: hand(0.78, 0.11), minute: hand(1.12, 0.07) };
-
-  // ---- octagonal slate domes at both ends ----
-  function dome(z) {
-    const g = new THREE.Group();
-    // square pavilion under the dome
-    box(20, 16, 20, brickMat, -1, 8, z);
-    box(21, 1.4, 21, stoneMat, -1, 16.4, z);
-    facadeWall(-11.06, z, 20, -1);
-    // octagonal brick drum + white pilasters + cornice
-    const drum = new THREE.Mesh(new THREE.CylinderGeometry(8.4, 8.4, 4.4, 8), brickMat);
-    drum.rotation.y = Math.PI / 8; drum.position.set(-1, 19.2, z); drum.castShadow = true; station.add(drum);
-    station.add(new THREE.Mesh(new THREE.CylinderGeometry(8.9, 8.9, 0.9, 8),
-      stoneMat).translateX(-1).translateY(17.2).translateZ(z));
-    const ring = new THREE.Mesh(new THREE.CylinderGeometry(8.9, 8.9, 0.9, 8), stoneMat);
-    ring.rotation.y = Math.PI / 8; ring.position.set(-1, 21.6, z); station.add(ring);
-    for (let i = 0; i < 8; i++) {                       // corner pilasters
-      const a = i / 8 * Math.PI * 2 + Math.PI / 8;
-      const p = new THREE.Mesh(new THREE.BoxGeometry(0.5, 4.4, 0.8), stoneMat);
-      p.position.set(-1 + Math.cos(a) * 8.4, 19.2, z + Math.sin(a) * 8.4);
-      p.rotation.y = -a; station.add(p);
+    // the dome, copper ribs, a ring of round dormers, lantern and spire
+    const DB = D0 + DH + 0.6;
+    add(domeGeo, slateMat, xc, DB, zc);
+    add(ribGeo, copperMat, xc, DB, zc, false);
+    for (let i = 0; i < 12; i++) {
+      const a = i / 12 * Math.PI * 2, r = 10.62, y = 2.1;
+      const n = new THREE.Vector3(Math.sin(a) * 0.93, 0.37, Math.cos(a) * 0.93).normalize();
+      roundWindow(xc + Math.sin(a) * r, DB + y, zc + Math.cos(a) * r, n, 0.9);
     }
-    // octagonal slate dome (faceted)
-    const d = new THREE.Mesh(new THREE.SphereGeometry(8.4, 8, 6, 0, Math.PI * 2, 0, Math.PI / 2), slateMat);
-    d.rotation.y = Math.PI / 8; d.scale.y = 1.35; d.position.set(-1, 22, z); d.castShadow = true; station.add(d);
-    // dormer windows (lucarnes) at the 4 cardinal faces of the dome base
-    for (let i = 0; i < 4; i++) {
-      const a = i / 4 * Math.PI * 2 + Math.PI / 8;
-      const dm = new THREE.Group();
-      const wmat = dormerGlass;
-      const wbox = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.7, 1.2), stoneMat);
-      const wgl = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.0, 0.2), wmat);
-      wgl.position.z = 0.7; dm.add(wbox, wgl);
-      const cap = new THREE.Mesh(new THREE.ConeGeometry(1.2, 1.0, 4), slateMat);
-      cap.rotation.y = Math.PI / 4; cap.position.y = 1.3; dm.add(cap);
-      dm.position.set(-1 + Math.cos(a) * 8.2, 23.6, z + Math.sin(a) * 8.2);
-      dm.rotation.y = -a + Math.PI / 2; station.add(dm);
-    }
-    // lantern crowning the dome (stone drum + copper cupola, no spike)
-    const lant = new THREE.Mesh(new THREE.CylinderGeometry(2.1, 2.4, 2.6, 8), stoneMat);
-    lant.rotation.y = Math.PI / 8; lant.position.set(-1, 32.6, z); station.add(lant);
-    const lcap = new THREE.Mesh(new THREE.SphereGeometry(2.2, 8, 5, 0, Math.PI * 2, 0, Math.PI / 2), copperMat);
-    lcap.scale.y = 1.15; lcap.position.set(-1, 33.9, z); station.add(lcap);
-    station.add(g);
+    add(new THREE.CylinderGeometry(2.1, 2.2, 0.5, 12), copperMat, xc, DB + 9.4, zc);
+    add(new THREE.CylinderGeometry(1.25, 1.35, 1.7, 8), copperMat, xc, DB + 10.5, zc);
+    add(new THREE.SphereGeometry(1.45, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2), copperMat, xc, DB + 11.35, zc);
+    add(new THREE.ConeGeometry(0.16, 6.2, 6), copperMat, xc, DB + 15.3, zc);
+    add(new THREE.SphereGeometry(0.28, 8, 6), copperMat, xc, DB + 13.2, zc);
   }
-  dome(-86); dome(86);
-  // ~150 boxes/cylinders → one mesh per material (clock hands stay live)
+  // hundreds of parts → one mesh per material
   const stat = [];
-  station.traverse(o => { if (o.isMesh && !clockHands.children.includes(o)) stat.push(o); });
+  station.traverse(o => { if (o.isMesh) stat.push(o); });
   mergeStatic(stat, station);
 }
 station.position.set(-62, 0, 0);
@@ -5781,7 +5842,7 @@ function animate(now = performance.now()) {
 }
 animate();
 if (/[?&]debug\b/.test(location.search)) window.__sim = {
-  renderer, scene, camera, controls, trains, THREE, placeCars, setTravel,
+  renderer, scene, camera, controls, trains, THREE, placeCars, setTravel, fadeables,
   get timeScale() { return timeScale; }, set timeScale(v) { timeScale = v; },
   simulate(sec) {        // run the dispatcher headless (tests)
     for (let k = 0; k < sec / 0.05; k++) { for (const t of trains) updateTrain(t, 0.05); sound.update(0.05); }
