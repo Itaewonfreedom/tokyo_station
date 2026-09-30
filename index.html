@@ -298,95 +298,146 @@ const DECK = 8.5;   // the whole yard rides a ~3-storey elevated viaduct
 const RAIL_Y = 0.53;  // rail head above the deck (car coordinates start at the deck)
 const PLAT_Y = 1.62;  // platform top ≈ car floor (≈1.1m above the rail head)
 
-/* Real Tokyo Station layout after the satellite photo and the track
-   diagram, west (Marunouchi, x < 0) → east (Yaesu):
-     1・2 Chuo (terminal from the north, right beside the brick station)
-     3・4 Keihin-Tohoku / Yamanote, 5・6 Yamanote / Keihin-Tohoku,
-     7・8 Ueno-Tokyo Line, 9・10 Tokaido Line (terminal from the south),
-     20–23 Tohoku Shinkansen (2 islands, terminal from the north),
-     14–19 Tokaido Shinkansen (3 islands, terminal from the south).
-   The Marunouchi side runs straight; the further east, the more a line
-   bows out, so the Shinkansen platforms curve like in the photo. North
-   of the station everything swings north-east into a slim corridor;
-   to the south it sweeps south-west. Extra platform tracks run into
-   their group's main line in the throat (their blocks are shared). */
-// station x, bow weight, type (T through / N terminal from north / S
-// terminal from south), north & south corridor lane, merge-into line,
-// buffer z for terminal lines
-const LINES = {
-  CH1:  { x: -42.35, w: 0,    type: 'N', N: 0, buf: 88 },
-  CH2:  { x: -33.65, w: 0,    type: 'N', N: 1, buf: 88 },
-  KA:   { x: -29.45, w: 0.05, type: 'T', N: 2, S: 0 },
-  YA:   { x: -20.75, w: 0.05, type: 'T', N: 3, S: 1 },
-  YB:   { x: -16.55, w: 0.1,  type: 'T', N: 4, S: 2 },
-  KB:   { x: -7.85,  w: 0.1,  type: 'T', N: 5, S: 3 },
-  UTN:  { x: -3.65,  w: 0.18, type: 'T', N: 6, S: 4 },
-  UTS:  { x: 5.05,   w: 0.18, type: 'T', N: 7, S: 5 },
-  TLN:  { x: 9.25,   w: 0.26, type: 'S', S: 5, into: 'UTS', buf: -160 },
-  TLS:  { x: 17.95,  w: 0.26, type: 'S', S: 5, into: 'UTS', buf: -160 },
-  THS1: { x: 23.15,  w: 0.4,  type: 'N', N: 8, buf: 150 },
-  THS2: { x: 31.85,  w: 0.4,  type: 'N', N: 8, into: 'THS1', buf: 150 },
-  THS3: { x: 36.15,  w: 0.55, type: 'N', N: 9, buf: 150 },
-  THS4: { x: 44.85,  w: 0.55, type: 'N', N: 9, into: 'THS3', buf: 150 },
-  TKS1: { x: 50.15,  w: 0.7,  type: 'S', S: 6, buf: -160 },
-  TKS2: { x: 58.85,  w: 0.7,  type: 'S', S: 6, into: 'TKS1', buf: -160 },
-  TKS3: { x: 63.05,  w: 0.85, type: 'S', S: 6, into: 'TKS1', buf: -160 },
-  TKS4: { x: 71.75,  w: 0.85, type: 'S', S: 7, buf: -160 },
-  TKS5: { x: 75.95,  w: 1,    type: 'S', S: 7, into: 'TKS4', buf: -160 },
-  TKS6: { x: 84.65,  w: 1,    type: 'S', S: 7, into: 'TKS4', buf: -160 },
-};
-const LINE_DEFS = Object.fromEntries(Object.entries(LINES).map(([k, v]) => [k, v.type]));
-const LINES_X = Object.fromEntries(Object.entries(LINES).map(([k, v]) => [k, v.x]));
-const BOW_W = Object.fromEntries(Object.entries(LINES).map(([k, v]) => [k, v.w]));
-const trunkOf = l => LINES[l].into || l;
-// corridor lanes beyond the throats (4.2m track centres)
-const laneN = i => -10 + 4.2 * i;
-const laneS = i => -48 + 4.3 * i;
-// throat spans (|z| where a line starts to swing → where it is in its lane)
-const THROAT_N = { CH1: [112, 330], CH2: [112, 330] }, THROAT_N_DEF = [160, 345];
-const THROAT_S = { KA: [92, 320], YA: [92, 320], YB: [112, 320], KB: [112, 320] }, THROAT_S_DEF = [150, 330];
-// beyond the south throat the whole corridor keeps sweeping south-west
-const driftS = z => -40 * smooth(Math.min(1, Math.max(0, (z - 300) / 320)));
-
-// island platforms: centre x, length, z centre, bow weight (the same as
-// their two tracks, so the clearances are exact). Lengths and staggered
-// ends follow the photo.
-const PLATFORMS = [
-  { x: -38.0, len: 180, off: -16,  bw: 0 },     // 1・2 Chuo
-  { x: -25.1, len: 176, off: -8,   bw: 0.05 },  // 3・4
-  { x: -12.2, len: 236, off: -16,  bw: 0.1 },   // 5・6
-  { x: 0.7,   len: 233, off: -17,  bw: 0.18 },  // 7・8
-  { x: 13.6,  len: 290, off: -6,   bw: 0.26 },  // 9・10
-  { x: 27.5,  len: 284, off: -8,   bw: 0.4 },   // 20・21
-  { x: 40.5,  len: 280, off: -9,   bw: 0.55 },  // 22・23
-  { x: 54.5,  len: 290, off: -6,   bw: 0.7 },   // 14・15
-  { x: 67.4,  len: 298, off: 1,    bw: 0.85 },  // 16・17
-  { x: 80.3,  len: 296, off: 3,    bw: 1 },     // 18・19
+/* Real Tokyo Station layout, fitted to the satellite photo (overlaid at
+   0.32 m per photo pixel) and the track diagram. West (Marunouchi, x < 0)
+   → east (Yaesu), the canopies seen from above are:
+     c1  1・2 Chuo — on an upper deck right above 3・4 Keihin-Tohoku/Yamanote
+     c2  5・6 Yamanote/Keihin-Tohoku      c3  7・8 Ueno-Tokyo Line
+     c4  9・10 Tokaido Line (solar roof)  c5・c6  20–23 Tohoku Shinkansen
+     c7–c9  14–19 Tokaido Shinkansen (white, curving round toward Yaesu)
+   Each island's centreline is a smooth curve through points measured on
+   the photo, kept at least one island pitch apart. North of the station
+   the lines swing into a slim corridor (the Chuo Line stays on its upper
+   deck over the Keihin-Tohoku/Yamanote pair, then ramps down to the
+   west); to the south they sweep south-west. Extra platform tracks run
+   into their group's main line in the throat and share its blocks. */
+const TRACK_OFF = 4.35;             // track centre ↔ island centre
+const UP_H = 9.4;                   // the Chuo upper deck above the main deck
+const SAT_MPP = 0.32, satX = px => -75.6 + (px - 205) * SAT_MPP, satZ = py => (py - 1010) * SAT_MPP;
+const CANOPY_PTS = [
+  [[680, 358], [720, 345], [800, 330], [880, 314], [960, 304], [1040, 298], [1120, 296], [1200, 294], [1240, 293]],
+  [[730, 405], [800, 394], [880, 390], [960, 381], [1040, 377], [1120, 370], [1200, 358], [1250, 352]],
+  [[590, 462], [720, 450], [800, 445], [880, 438], [960, 428], [1040, 423], [1120, 415], [1200, 400], [1280, 395], [1330, 392]],
+  [[590, 491], [720, 490], [800, 486], [880, 481], [960, 472], [1040, 465], [1120, 455], [1200, 441], [1280, 435], [1320, 432]],
+  [[510, 530], [640, 530], [800, 530], [880, 527], [960, 519], [1040, 509], [1120, 500], [1200, 489], [1280, 478], [1360, 470], [1440, 466]],
+  [[510, 568], [640, 570], [800, 570], [880, 568], [960, 566], [1040, 558], [1120, 548], [1200, 537], [1280, 530], [1360, 515], [1430, 509]],
+  [[515, 605], [640, 612], [800, 620], [880, 618], [960, 614], [1040, 613], [1120, 600], [1200, 590], [1280, 577], [1360, 566], [1440, 552]],
+  [[530, 700], [640, 688], [800, 670], [880, 668], [960, 660], [1040, 655], [1120, 644], [1200, 635], [1280, 623], [1360, 612], [1500, 590]],
+  [[540, 750], [640, 736], [800, 722], [880, 716], [960, 707], [1040, 700], [1120, 695], [1200, 684], [1280, 676], [1360, 662], [1510, 640]],
 ];
+// islands (z extents from the photo): which canopy curve, and whether it's up top
+const PLATFORMS = [
+  { c: 0, z0: satZ(680), z1: satZ(1240), up: true },   // 1・2 Chuo (upper deck)
+  { c: 0, z0: -100,      z1: 76,         roofless: true },  // 3・4 under the Chuo deck
+  { c: 1, z0: satZ(730), z1: satZ(1250) },             // 5・6
+  { c: 2, z0: satZ(590), z1: satZ(1330) },             // 7・8
+  { c: 3, z0: satZ(590), z1: satZ(1320), solar: true },// 9・10
+  { c: 4, z0: satZ(510), z1: satZ(1440) },             // 20・21
+  { c: 5, z0: satZ(510), z1: satZ(1430) },             // 22・23
+  { c: 6, z0: satZ(515), z1: satZ(1440) },             // 14・15
+  { c: 7, z0: satZ(530), z1: satZ(1500) },             // 16・17
+  { c: 8, z0: satZ(540), z1: satZ(1510) },             // 18・19
+];
+for (const p of PLATFORMS) { p.len = p.z1 - p.z0; p.off = (p.z0 + p.z1) / 2; }
 
 const smooth = k => k * k * (3 - 2 * k);
 const lerp = (a, b, k) => a + (b - a) * k;
 
-// the station bulge: nothing on the Marunouchi side, up to BOW_A at the
-// east edge, fading out past the platform ends
-const BOW_A = 18, BOW_L = 215;
-const bowRaw = z => Math.abs(z) < BOW_L ? BOW_A * 0.5 * (1 + Math.cos(Math.PI * z / BOW_L)) : 0;
-const bendFor = (w, z) => w * bowRaw(z);
+// canopy centrelines: Catmull-Rom through the photo points, straight
+// beyond them, then tabulated every 2m and pushed apart where two
+// islands would come closer than one island pitch
+const CL_Z0 = -240, CL_STEP = 2, CL_N = 241, MIN_PITCH = 12.8;
+const _clTab = (() => {
+  const curves = CANOPY_PTS.map(pts => {
+    const P = pts.map(([py, px]) => [satZ(py), satX(px)]);
+    return z => {
+      const n = P.length;
+      if (z <= P[0][0]) { const s = (P[1][1] - P[0][1]) / (P[1][0] - P[0][0]); return P[0][1] + s * (z - P[0][0]) * 0.6; }
+      if (z >= P[n - 1][0]) { const s = (P[n - 1][1] - P[n - 2][1]) / (P[n - 1][0] - P[n - 2][0]); return P[n - 1][1] + s * (z - P[n - 1][0]) * 0.6; }
+      let i = 0; while (P[i + 1][0] < z) i++;
+      const p0 = P[Math.max(0, i - 1)], p1 = P[i], p2 = P[i + 1], p3 = P[Math.min(n - 1, i + 2)];
+      const t = (z - p1[0]) / (p2[0] - p1[0]), t2 = t * t, t3 = t2 * t;
+      const m1 = (p2[1] - p0[1]) / (p2[0] - p0[0]) * (p2[0] - p1[0]), m2 = (p3[1] - p1[1]) / (p3[0] - p1[0]) * (p2[0] - p1[0]);
+      return (2 * t3 - 3 * t2 + 1) * p1[1] + (t3 - 2 * t2 + t) * m1 + (-2 * t3 + 3 * t2) * p2[1] + (t3 - t2) * m2;
+    };
+  });
+  const T = curves.map(() => new Float32Array(CL_N));
+  for (let i = 0; i < CL_N; i++) {
+    const z = CL_Z0 + i * CL_STEP;
+    let prev = -1e9;
+    curves.forEach((f, c) => {
+      let x = f(z);
+      if (c === 0) x = Math.max(x, -46);        // keep the Chuo deck off the brick station
+      x = Math.max(x, prev + MIN_PITCH * (c === 1 ? 1.1 : 1));   // c1→c2 also clears the Chuo deck columns
+      T[c][i] = x; prev = x;
+    });
+  }
+  return T;
+})();
+function canopyX(c, z) {
+  const f = Math.min(CL_N - 1.001, Math.max(0, (z - CL_Z0) / CL_STEP)), i = Math.floor(f);
+  return lerp(_clTab[c][i], _clTab[c][i + 1], f - i);
+}
+const platX = (p, z) => canopyX(p.c, z);
+const platY = p => DECK + (p.up ? UP_H : 0);
 
-// x of a line at signed z (station position + bow, then the throat)
+// station x, platform, side, type (T through / N terminal from north /
+// S terminal from south), north & south corridor lane, merge-into line,
+// buffer z for terminal lines
+const LINES = {
+  CH1:  { p: 0, side: -1, type: 'N', N: 0, buf: 80, up: true },
+  CH2:  { p: 0, side: 1,  type: 'N', N: 1, buf: 80, up: true },
+  KA:   { p: 1, side: -1, type: 'T', N: 0, S: 0 },
+  YA:   { p: 1, side: 1,  type: 'T', N: 1, S: 1 },
+  YB:   { p: 2, side: -1, type: 'T', N: 2, S: 2 },
+  KB:   { p: 2, side: 1,  type: 'T', N: 3, S: 3 },
+  UTN:  { p: 3, side: -1, type: 'T', N: 4, S: 4 },
+  UTS:  { p: 3, side: 1,  type: 'T', N: 5, S: 5 },
+  TLN:  { p: 4, side: -1, type: 'S', S: 5, into: 'UTS', buf: -140 },
+  TLS:  { p: 4, side: 1,  type: 'S', S: 5, into: 'UTS', buf: -140 },
+  THS1: { p: 5, side: -1, type: 'N', N: 6, buf: 143 },
+  THS2: { p: 5, side: 1,  type: 'N', N: 6, into: 'THS1', buf: 143 },
+  THS3: { p: 6, side: -1, type: 'N', N: 7, buf: 143 },
+  THS4: { p: 6, side: 1,  type: 'N', N: 7, into: 'THS3', buf: 143 },
+  TKS1: { p: 7, side: -1, type: 'S', S: 6, buf: -163 },
+  TKS2: { p: 7, side: 1,  type: 'S', S: 6, into: 'TKS1', buf: -163 },
+  TKS3: { p: 8, side: -1, type: 'S', S: 6, into: 'TKS1', buf: -163 },
+  TKS4: { p: 8, side: 1,  type: 'S', S: 7, buf: -163 },
+  TKS5: { p: 9, side: -1, type: 'S', S: 7, into: 'TKS4', buf: -163 },
+  TKS6: { p: 9, side: 1,  type: 'S', S: 7, into: 'TKS4', buf: -163 },
+};
+const LINE_DEFS = Object.fromEntries(Object.entries(LINES).map(([k, v]) => [k, v.type]));
+const trunkOf = l => LINES[l].into || l;
+// corridor lanes beyond the throats
+const laneN = i => -8 + 4.6 * i;
+const laneS = i => -48 + 4.3 * i;
+const CHUO_FAR = [-19.5, -14.9];          // where the Chuo pair runs once it's back on the ground
+// throat spans (|z| where a group starts to swing → where it is in its lane)
+const THROAT_N = { KA: [104, 300], YA: [104, 300], CH1: [104, 300], CH2: [104, 300], YB: [96, 300], KB: [96, 300], UTN: [140, 330], UTS: [140, 330] }, THROAT_N_DEF = [164, 350];
+const THROAT_S = { KA: [82, 300], YA: [82, 300], YB: [82, 300], KB: [82, 300], UTN: [106, 320], UTS: [106, 320] }, THROAT_S_DEF = [166, 340];
+// beyond the south throat the whole corridor keeps sweeping south-west
+const driftS = z => -40 * smooth(Math.min(1, Math.max(0, (z - 300) / 320)));
+// the Chuo pair: on its upper deck through the station and out over the
+// Keihin-Tohoku/Yamanote pair, then across to the west and down a ramp
+const chuoUp = z => smooth(Math.min(1, Math.max(0, (z + 560) / 180)));
+const chuoWest = z => smooth(Math.min(1, Math.max(0, (-z - 340) / 140)));
+
 function lineXAt(line, z) {
   const L = LINES[line];
-  let x = L.x + bendFor(L.w, z);
+  const x = platX(PLATFORMS[L.p], z) + L.side * TRACK_OFF;
   const north = z < 0, lane = north ? L.N : L.S;
   if (lane == null) return x;
-  const T = LINES[trunkOf(line)];
-  const [z0, z1] = (north ? THROAT_N : THROAT_S)[trunkOf(line)] || (north ? THROAT_N_DEF : THROAT_S_DEF);
-  const target = north ? laneN(lane) : laneS(lane) + driftS(z);
+  const tr = trunkOf(line);
+  const [z0, z1] = (north ? THROAT_N : THROAT_S)[tr] || (north ? THROAT_N_DEF : THROAT_S_DEF);
+  let target = north ? laneN(lane) : laneS(lane) + driftS(z);
+  if (L.up && north) target = lerp(target, CHUO_FAR[lane], chuoWest(z));
   const az = Math.abs(z);
   if (az >= z1) return target;
   if (az <= z0) return x;
   return lerp(x, target, smooth((az - z0) / (z1 - z0)));
 }
+// rail level of a line (the Chuo pair rides the upper deck)
+const lineY = (line, z) => DECK + (LINES[line].up ? UP_H * chuoUp(z) : 0);
 // where a merging line has fully joined its trunk (its own rails stop)
 function mergeZ(line) {
   const L = LINES[line];
@@ -402,12 +453,7 @@ function lineSpan(line) {
   if (L.type === 'N') return [m != null ? m : -Z_END, L.buf];
   return [L.buf, m != null ? m : Z_END];
 }
-// the platform a line serves (nearest island at the station)
-function platformOf(line) {
-  let best = PLATFORMS[0], bd = 1e9;
-  for (const p of PLATFORMS) { const d = Math.abs(p.x - LINES[line].x); if (d < bd) { bd = d; best = p; } }
-  return best;
-}
+const platformOf = line => PLATFORMS[LINES[line].p];
 
 // outer edges of the rail corridor (drives the viaduct, gantries, city):
 // the outermost lines present at z, tabulated every 2m
@@ -436,12 +482,28 @@ function corridorEdges(z) {
     right: lerp(_edgeTab.R[i], _edgeTab.R[i + 1], k),
   };
 }
+// cubic fit of each island's centreline over its length (for the lamp
+// shader, which can't read the tables)
+const PLAT_FIT = PLATFORMS.map(p => {
+  const zc = p.off, S = Array.from({ length: 4 }, () => new Float64Array(5)), N = 24;
+  for (let k = 0; k <= N; k++) {
+    const z = p.z0 - 6 + (p.len + 12) * k / N, u = (z - zc) / 100, x = platX(p, z);
+    const b = [1, u, u * u, u * u * u];
+    for (let r = 0; r < 4; r++) { for (let c = 0; c < 4; c++) S[r][c] += b[r] * b[c]; S[r][4] += b[r] * x; }
+  }
+  for (let c = 0; c < 4; c++) {                                     // Gauss-Jordan
+    let m = c; for (let r = c + 1; r < 4; r++) if (Math.abs(S[r][c]) > Math.abs(S[m][c])) m = r;
+    [S[c], S[m]] = [S[m], S[c]];
+    for (let r = 0; r < 4; r++) if (r !== c) { const f = S[r][c] / S[c][c]; for (let k = c; k < 5; k++) S[r][k] -= f * S[c][k]; }
+  }
+  return [0, 1, 2, 3].map(r => S[r][4] / S[r][r]);
+});
 
 function buildRoute(line, dir) {
   const step = 2;
   const pts = [];
   for (let z = -Z_END; z <= Z_END + 0.01; z += step)
-    pts.push([lineXAt(line, z), z]);
+    pts.push([lineXAt(line, z), z, lineY(line, z)]);
   if (dir < 0) pts.reverse();
   const ss = [0];
   for (let i = 1; i < pts.length; i++) {
@@ -458,6 +520,8 @@ function buildRoute(line, dir) {
     out.x = pts[i-1][0] + (pts[i][0] - pts[i-1][0]) * t;
     out.z = pts[i-1][1] + (pts[i][1] - pts[i-1][1]) * t;
     out.yaw = Math.atan2(pts[i][0] - pts[i-1][0], pts[i][1] - pts[i-1][1]);
+    out.y = pts[i-1][2] + (pts[i][2] - pts[i-1][2]) * t;
+    out.pitch = Math.atan2(pts[i][2] - pts[i-1][2], ss[i] - ss[i-1]);
     return out;
   }
   function sAtZ(zq) {
@@ -934,13 +998,16 @@ scene.environment = envMaps.update(0, 0);
 const stationU = {
   uNight: { value: 0 },
   uDark: { value: 0 },
-  // per platform: centre x, bow weight, centre z, half length
-  uPlat: { value: PLATFORMS.map(p => new THREE.Vector4(p.x, p.bw, p.off, p.len / 2)) },
+  // per platform: cubic centreline x(u), u = (z - centre) / 100 …
+  uPlat: { value: PLAT_FIT.map(f => new THREE.Vector4(...f)) },
+  // … and centre z, half length, lamp height
+  uPlatB: { value: PLATFORMS.map(p => new THREE.Vector4(p.off, p.len / 2, platY(p) + PLAT_Y + 3.3, 0)) },
 };
 const STATION_GLSL = `
 uniform float uNight;
 uniform float uDark;
 uniform vec4 uPlat[${PLATFORMS.length}];
+uniform vec4 uPlatB[${PLATFORMS.length}];
 vec3 stationIrr(vec3 pv, vec3 nv) {
   if (uNight < 0.01) return vec3(0.);
   mat3 R = transpose(mat3(viewMatrix));
@@ -949,15 +1016,15 @@ vec3 stationIrr(vec3 pv, vec3 nv) {
   if (abs(p.z) > 200. && p.y > 3.) return vec3(0.);
   vec3 n = normalize(R * nv);
   float z = p.z;
-  float bow = abs(z) < ${BOW_L.toFixed(1)} ? ${(BOW_A / 2).toFixed(2)} * (1. + cos(3.14159265 * z / ${BOW_L.toFixed(1)})) : 0.;
   float acc = 0.;
   float lampY = ${(DECK + PLAT_Y + 3.3).toFixed(2)};
-  if (p.y < lampY + 0.35 && p.y > ${(DECK - 1).toFixed(1)}) {
+  if (p.y < lampY + ${(UP_H + 0.35).toFixed(2)} && p.y > ${(DECK - 1).toFixed(1)}) {
     for (int i = 0; i < ${PLATFORMS.length}; i++) {
-      vec4 P = uPlat[i];
-      float zin = 1. - smoothstep(P.w - 8., P.w + 3., abs(z - P.z));
-      if (zin <= 0.) continue;
-      vec2 L = vec2(P.x + P.y * bow - p.x, lampY - p.y);
+      vec4 B = uPlatB[i], P = uPlat[i];
+      float zin = 1. - smoothstep(B.y - 8., B.y + 3., abs(z - B.x));
+      if (zin <= 0. || p.y > B.z + 0.35 || p.y < B.z - 8.) continue;
+      float u = (z - B.x) / 100.;
+      vec2 L = vec2(P.x + u * (P.y + u * (P.z + u * P.w)) - p.x, B.z - p.y);
       float d2 = dot(L, L);
       if (d2 > 130.) continue;
       vec2 l = L * inversesqrt(d2 + 1e-3);
@@ -984,6 +1051,7 @@ function patchStation(shader) {
   shader.uniforms.uNight = stationU.uNight;
   shader.uniforms.uDark = stationU.uDark;
   shader.uniforms.uPlat = stationU.uPlat;
+  shader.uniforms.uPlatB = stationU.uPlatB;
   shader.fragmentShader = shader.fragmentShader
     .replace('#include <common>', '#include <common>\n' + STATION_GLSL)
     .replace('#include <lights_fragment_maps>', '#include <lights_fragment_maps>\n\tirradiance += stationIrr(-vViewPosition, normal);');
@@ -1071,9 +1139,9 @@ function updateFades(dt) {
     // sample the head, middle and tail of the consist; fade any building
     // that blocks the camera's view of ANY of them
     const t = followTrain;
-    t.route.posAt(t.sHead - 4, _p);              _samplePts[0].set(_p.x, DECK + 2.6, _p.z);
-    t.route.posAt(t.sHead - t.len / 2, _p);      _samplePts[1].set(_p.x, DECK + 2.6, _p.z);
-    t.route.posAt(t.sHead - t.len + 4, _p);      _samplePts[2].set(_p.x, DECK + 2.6, _p.z);
+    t.route.posAt(t.sHead - 4, _p);              _samplePts[0].set(_p.x, _p.y + 2.6, _p.z);
+    t.route.posAt(t.sHead - t.len / 2, _p);      _samplePts[1].set(_p.x, _p.y + 2.6, _p.z);
+    t.route.posAt(t.sHead - t.len + 4, _p);      _samplePts[2].set(_p.x, _p.y + 2.6, _p.z);
     for (const f of fadeables) {
       if (f.target < 1) continue;
       for (const tp of _samplePts) {
@@ -1408,6 +1476,8 @@ function bedBucket(kind, z) {
 // sweep a cross-section along x(z); uv planar in world metres (continuous
 // across neighbouring beds), aTrack = (offset from centreline, distance
 // along, 1 = has sleepers)
+// extra rail level while laying a line (the Chuo upper deck), set by railPath
+let _railY = () => 0;
 function sweepBed(kind, xFn, z0, z1, prof, yOff, sleepers, uvScale) {
   const step = 3;
   for (let za = z0; za < z1 - 0.01; za += 60) {
@@ -1416,7 +1486,7 @@ function sweepBed(kind, xFn, z0, z1, prof, yOff, sleepers, uvScale) {
     for (let i = 0; i <= n; i++) {
       const z = za + (zb - za) * i / n, x = xFn(z);
       for (const [px, py] of prof) {
-        const wx = x + px, wy = DECK + py + yOff;
+        const wx = x + px, wy = DECK + py + yOff + _railY(z);
         B.pos.push(wx, wy, z);
         if (uvScale) B.uv.push(wx / uvScale[0], z / uvScale[1]); else B.uv.push((px / (prof[np - 1][0] - prof[0][0])) + 0.5, z / 4.95);
         B.trk.push(px, z - z0, sleepers ? 1 : 0);
@@ -1440,7 +1510,7 @@ function railStrips(xFn, z0, z1, off, prof, segLen) {
     const pos = [], idx = [];
     for (let i = 0; i <= n; i++) {
       const z = z0 + (z1 - z0) * i / n, x = xFn(z) + off;
-      for (const q of [prof[e], prof[e + 1]]) pos.push(x + q[0], DECK + RAIL_FOOT_Y + q[1], z);
+      for (const q of [prof[e], prof[e + 1]]) pos.push(x + q[0], DECK + RAIL_FOOT_Y + q[1] + _railY(z), z);
       if (i > 0) { const a = (i - 1) * 2; idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3); }
     }
     const g = new THREE.BufferGeometry();
@@ -1459,6 +1529,7 @@ function railStrips(xFn, z0, z1, off, prof, segLen) {
 // straight, so the global bend and the yard bulge flow through all of it
 function railPath(xFn, z0, z1, opts = {}) {
   const slab = !!opts.slab, yOff = opts.under ? -0.004 : 0;
+  _railY = opts.yFn || (() => 0);
   // bed
   if (slab) {
     sweepBed('slabBase', xFn, z0, z1, SLAB_BASE, yOff, false, [4, 4]);
@@ -1483,10 +1554,11 @@ function railPath(xFn, z0, z1, opts = {}) {
     _m4.makeRotationFromEuler(_eu);
     if (slab) {
       for (const off of [-GAUGE, GAUGE]) {
-        const m = _m4.clone(); m.setPosition(x + off, DECK + yOff, z); padMatrices.push(m);
+        const m = _m4.clone(); m.setPosition(x + off, DECK + yOff + _railY(z), z); padMatrices.push(m);
       }
-    } else { _m4.setPosition(x, DECK + yOff, z); tieMatrices.push(_m4.clone()); }
+    } else { _m4.setPosition(x, DECK + yOff + _railY(z), z); tieMatrices.push(_m4.clone()); }
   }
+  _railY = () => 0;
 }
 // decorative crossover blending between two line paths (laid a hair
 // lower so the through line's bed wins where they overlap)
@@ -1495,15 +1567,15 @@ function crossRails(lineA, lineB, z0, z1, side) {
     const az = Math.abs(z);
     const k = smooth(Math.min(1, Math.max(0, (az - z0) / (z1 - z0))));
     return lerp(lineXAt(lineA, z), lineXAt(lineB, z), k);
-  }, side < 0 ? -z1 : z0, side < 0 ? -z0 : z1, { under: true, slab: SLAB_LINES.has(lineA) });
+  }, side < 0 ? -z1 : z0, side < 0 ? -z0 : z1, { under: true, slab: SLAB_LINES.has(lineA), yFn: LINES[lineA].up ? z => lineY(lineA, z) - DECK : null });
 }
 
 // buffer stop at the dead end of a terminal track
 const bufferGeo = new THREE.BoxGeometry(2.0, 1.0, 0.6);
 const bufferMat = new THREE.MeshStandardMaterial({ color: 0x5a1c14, roughness: 0.9 });
-function addBuffer(x, z) {
+function addBuffer(x, z, y = DECK) {
   const b = new THREE.Mesh(bufferGeo, bufferMat);
-  b.position.set(x, DECK + 0.85, z);
+  b.position.set(x, y + 0.85, z);
   b.castShadow = true;
   scene.add(b);
   railBits.push(b);
@@ -1512,13 +1584,13 @@ function addBuffer(x, z) {
 // lay every line over its own span; terminal tracks end at a buffer
 for (const l of Object.keys(LINES)) {
   const L = LINES[l], [z0, z1] = lineSpan(l);
-  railPath(z => lineXAt(l, z), z0, z1, { slab: SLAB_LINES.has(l), under: !!L.into });
-  if (L.type === 'N') addBuffer(lineXAt(l, L.buf + 0.5), L.buf + 0.5);
-  if (L.type === 'S') addBuffer(lineXAt(l, L.buf - 0.5), L.buf - 0.5);
+  railPath(z => lineXAt(l, z), z0, z1, { slab: SLAB_LINES.has(l), under: !!L.into, yFn: L.up ? z => lineY(l, z) - DECK : null });
+  if (L.type === 'N') addBuffer(lineXAt(l, L.buf + 0.5), L.buf + 0.5, lineY(l, L.buf));
+  if (L.type === 'S') addBuffer(lineXAt(l, L.buf - 0.5), L.buf - 0.5, lineY(l, L.buf));
 }
 // decorative scissors crossovers just beyond the through platforms' ends
 crossRails('KA', 'YA', 100, 118, -1);
-crossRails('YB', 'KB', 140, 158, -1);
+crossRails('YB', 'KB', 100, 118, -1);
 crossRails('UTN', 'UTS', 140, 158, -1);
 crossRails('CH1', 'CH2', 118, 138, -1);
 
@@ -1582,7 +1654,8 @@ const platLightMat = new THREE.MeshStandardMaterial({
 });
 // sweeps a cross-section profile along a curved centreline x(z);
 // scaleFn(z) tapers the profile width so platform ends come to points
-function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null) {
+function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null, yBase = DECK) {
+  const yAt = typeof yBase === 'function' ? yBase : () => yBase;
   const rows = Math.max(4, Math.ceil((z1 - z0) / 5));
   const np = profile.length;
   const pos = [], uv = [], idx = [];
@@ -1591,7 +1664,7 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null)
     const cx = cxFn(z);
     const s = scaleFn ? scaleFn(z) : 1;
     for (let p = 0; p < np; p++) {
-      pos.push(cx + profile[p][0] * s, DECK + profile[p][1], z);
+      pos.push(cx + profile[p][0] * s, yAt(z) + profile[p][1], z);
       uv.push(p / (np - 1), z * vScale);
     }
     if (i > 0) {
@@ -1616,17 +1689,15 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null)
   // canopy colours as seen from above: green roofs over the Chuo and
   // Keihin/Yamanote islands, grey, the dark solar roof of 7・8, green
   // Tohoku, white Tokaido Shinkansen
-  const roofColors = [0x9cc4b6, 0xa6cdbf, 0xc9ccc9, 0x7d8494, 0xb4d2c6, 0x93c0ae, 0x93c0ae, 0xeef0ee, 0xeef0ee, 0xeef0ee];
+  // canopy colours as seen from above: green over the Chuo deck and
+  // 5・6, grey 7・8, the solar roof of 9・10, green Tohoku, white Tokaido
+  const roofColors = [0x8fbcae, 0, 0xa6c8bd, 0xc6c9c9, 0xffffff, 0x94c2b4, 0x94c2b4, 0xeef0ee, 0xeef0ee, 0xeef0ee];
   const fasciaMat = new THREE.MeshStandardMaterial({ color: 0xd9dde0, roughness: 0.7, side: THREE.DoubleSide });
   const platBits = [];
-  // wide, shallow GABLE roofs (two straight slopes meeting at a low
-  // ridge) — like the real platform canopies, not a steep arch. 9.6m
-  // wide so the yard reads as a near-solid deck with slim track slits.
-  // canopy: raised with the platform (≈3.4m clear above it) and trimmed
-  // back so its eaves stay clear of the pantographs over the tracks
-  // canopy: raised with the platform (≈3.4m clear above it); the eaves
-  // reach out over the car roofs but stay inside the contact wires
-  const HW = 4.0, EAVE = PLAT_Y + 3.45, RIDGE = PLAT_Y + 4.15;
+  // wide, shallow GABLE roofs high above the platform: like the photo
+  // they cover their tracks too (only slim slits between neighbours);
+  // the eaves ride above the catenary
+  const HW = 5.7, EAVE = PLAT_Y + 5.75, RIDGE = PLAT_Y + 6.35;
   const archProfile = [
     [-HW, EAVE], [-HW * 0.5, (EAVE + RIDGE) / 2 + 0.08], [0, RIDGE],
     [HW * 0.5, (EAVE + RIDGE) / 2 + 0.08], [HW, EAVE],
@@ -1635,15 +1706,15 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null)
   const eaveProfileR = [[HW, EAVE], [HW, EAVE - 0.35]];
   /* roof skins as the satellite photo shows them (u across the roof,
      v along it, 1 unit = 4m): panel seams every ~6m and a ridge line
-     on the steel roofs, a grid of solar panels on 7・8, broad white
-     membrane panels with a spine on the Shinkansen roofs */
+     on the steel roofs, a grid of solar panels on 9・10, broad white
+     membrane panels with a spine on the Tokaido Shinkansen roofs */
   const roofSkin = kind => {
     const c = document.createElement('canvas'); c.width = 64; c.height = 128;
     const g = c.getContext('2d');
     if (kind === 'solar') {
       g.fillStyle = '#23283a'; g.fillRect(0, 0, 64, 128);
       g.fillStyle = '#3a4466';
-      for (let y = 2; y < 128; y += 16) for (let x = 3; x < 32; x += 13) { g.fillRect(x, y, 11, 14); g.fillRect(63 - x - 11, y, 11, 14); }
+      for (let y = 2; y < 128; y += 16) for (let x = 3; x < 32; x += 9) { g.fillRect(x, y, 7, 14); g.fillRect(63 - x - 7, y, 7, 14); }
       g.fillStyle = '#b9bcc2'; g.fillRect(30, 0, 4, 128);
     } else if (kind === 'shink') {
       g.fillStyle = '#fff'; g.fillRect(0, 0, 64, 128);
@@ -1662,9 +1733,9 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null)
     return t;
   };
   const skins = { steel: roofSkin('steel'), solar: roofSkin('solar'), shink: roofSkin('shink') };
-  const roofKind = i => i === 3 ? 'solar' : i >= 5 ? 'shink' : 'steel';
+  const roofKind = p => p.solar ? 'solar' : p.c >= 6 ? 'shink' : 'steel';
   const deckProfile = [[-2.6, 0], [-2.6, PLAT_Y], [2.6, PLAT_Y], [2.6, 0]];
-  const pillarGeo = new THREE.CylinderGeometry(0.13, 0.13, EAVE + 0.35 - PLAT_Y, 8);
+  const pillarGeo = new THREE.CylinderGeometry(0.13, 0.13, 1, 8);
   const pillarMat = new THREE.MeshStandardMaterial({ color: 0x5e6a72, roughness: 0.6, metalness: 0.4 });
   const pillarFeet = [];
   const radialShade = (() => {
@@ -1678,43 +1749,74 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null)
   const pillars = new THREE.InstancedMesh(pillarGeo, pillarMat, totalPillars);
   const m = new THREE.Matrix4();
   let pi = 0;
-  PLATFORMS.forEach(({ x, len, off, bw }, i) => {
-    const zP0 = off - len / 2, zP1 = off + len / 2;
+  PLATFORMS.forEach((P, i) => {
+    const { len, off } = P, zP0 = off - len / 2, zP1 = off + len / 2, Y = platY(P);
     // taper to a slim point over each platform's last 45m (the canopy
     // ends are sharper than the platforms, like the photo)
     const taper = z => 1 - 0.7 * smooth(Math.min(1, Math.max(0, (Math.abs(z - off) - (len / 2 - 45)) / 45)));
     const roofTaper = z => 1 - 0.86 * smooth(Math.min(1, Math.max(0, (Math.abs(z - off) - (len / 2 - 55)) / 57)));
-    const cx = z => x + bendFor(bw, z);  // platforms follow their group's curve
-    platBits.push(sweepProfile(cx, zP0, zP1, deckProfile, platMat, 0.25, taper));
+    const cx = z => platX(P, z);
+    platBits.push(sweepProfile(cx, zP0, zP1, deckProfile, platMat, 0.25, taper, Y),
+      sweepProfile(cx, zP0, zP1, [[-2.45, PLAT_Y + 0.015], [-2.15, PLAT_Y + 0.015]], yellowMat, 0.25, taper, Y),
+      sweepProfile(cx, zP0, zP1, [[2.15, PLAT_Y + 0.015], [2.45, PLAT_Y + 0.015]], yellowMat, 0.25, taper, Y));
+    if (P.roofless) {               // 3・4: the Chuo deck above is its roof; lamps under it
+      platBits.push(sweepProfile(cx, zP0 + 6, zP1 - 6, [[0.22, PLAT_Y + 3.4], [-0.22, PLAT_Y + 3.4]], roofLightMat, 0.25, null, Y));
+      return;
+    }
     // a little self-light so the underside (what you see from the
     // platform) reads as a pale canopy, not a muddy brown ceiling
-    const kind = roofKind(i);
+    const kind = roofKind(P);
     const archMat = new THREE.MeshStandardMaterial({
-      color: kind === 'solar' ? 0xffffff : roofColors[i % roofColors.length], map: skins[kind],
+      color: roofColors[i], map: skins[kind],
       roughness: kind === 'solar' ? 0.35 : 0.65, metalness: kind === 'solar' ? 0.3 : 0, side: THREE.DoubleSide,
-      emissive: roofColors[i % roofColors.length], emissiveIntensity: 0.12 });
-    const roof = sweepProfile(cx, zP0 - 2, zP1 + 2, archProfile, archMat, 0.25, roofTaper);
+      emissive: kind === 'solar' ? 0x7d8494 : roofColors[i], emissiveIntensity: 0.12 });
+    const roof = sweepProfile(cx, zP0 - 2, zP1 + 2, archProfile, archMat, 0.25, roofTaper, Y);
     registerFadeable(roof);
     platBits.push(
-      sweepProfile(cx, zP0 - 2, zP1 + 2, eaveProfile, fasciaMat, 0.25, roofTaper),
-      sweepProfile(cx, zP0 - 2, zP1 + 2, eaveProfileR, fasciaMat, 0.25, roofTaper),
-      sweepProfile(cx, zP0 + 6, zP1 - 6, [[0.22, EAVE - 0.12], [-0.22, EAVE - 0.12]], roofLightMat),
-      sweepProfile(cx, zP0, zP1, [[-2.45, PLAT_Y + 0.015], [-2.15, PLAT_Y + 0.015]], yellowMat, 0.25, taper),
-      sweepProfile(cx, zP0, zP1, [[2.15, PLAT_Y + 0.015], [2.45, PLAT_Y + 0.015]], yellowMat, 0.25, taper));
+      sweepProfile(cx, zP0 - 2, zP1 + 2, eaveProfile, fasciaMat, 0.25, roofTaper, Y),
+      sweepProfile(cx, zP0 - 2, zP1 + 2, eaveProfileR, fasciaMat, 0.25, roofTaper, Y),
+      sweepProfile(cx, zP0 + 6, zP1 - 6, [[0.22, PLAT_Y + 3.6], [-0.22, PLAT_Y + 3.6]], roofLightMat, 0.25, null, Y));
     const nP = Math.floor(len / 14);
     for (let k = 0; k < nP; k++) {
-      const z = zP0 + 7 + k * 14;
-      m.makeTranslation(cx(z), DECK + (PLAT_Y + EAVE + 0.35) / 2, z);
+      const z = zP0 + 7 + k * 14, ph = EAVE + 0.35 - PLAT_Y;
+      m.makeScale(1, ph, 1).setPosition(cx(z), Y + PLAT_Y + ph / 2, z);
       pillars.setMatrixAt(pi++, m);
-      pillarFeet.push(new THREE.Matrix4().makeTranslation(cx(z), DECK + PLAT_Y + 0.006, z));
+      pillarFeet.push(new THREE.Matrix4().makeTranslation(cx(z), Y + PLAT_Y + 0.006, z));
     }
   });
+  pillars.count = pi;
   // the white box that sits on the Chuo island's roof mid-station
   {
     const p = PLATFORMS[0], g = new THREE.BoxGeometry(2 * HW - 0.6, 1.7, 22);
-    g.translate(p.x + bendFor(p.bw, -4), DECK + RIDGE + 0.8, -4);
+    g.translate(platX(p, -4), platY(p) + RIDGE + 0.8, -4);
     const box = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0xf1f1ee, roughness: 0.6 }));
     box.castShadow = true; scene.add(box); platBits.push(box);
+  }
+  /* the Chuo Line's upper deck: a concrete slab carrying the 1・2 island
+     and its two tracks over 3・4, on hammerhead piers that stand on the
+     3・4 platform (and between the tracks further out), ramping down to
+     the main deck north of the station */
+  {
+    const cxC = z => (lineXAt('CH1', z) + lineXAt('CH2', z)) / 2, yC = z => lineY('CH1', z);
+    const zA = -560, zB = LINES.CH1.buf + 10;
+    const slabMat = new THREE.MeshStandardMaterial({ color: 0x8d8a84, roughness: 0.95, side: THREE.DoubleSide });
+    platBits.push(
+      sweepProfile(cxC, zA, zB, [[-6.6, -0.95], [-6.6, 0.05], [6.6, 0.05], [6.6, -0.95], [-6.6, -0.95]], slabMat, 0.25, null, yC),
+      sweepProfile(cxC, zA + 40, zB, [[-6.6, 0.05], [-6.6, 1.1], [-6.35, 1.1], [-6.35, 0.05]], slabMat, 0.25, null, yC),
+      sweepProfile(cxC, zA + 40, zB, [[6.35, 0.05], [6.35, 1.1], [6.6, 1.1], [6.6, 0.05]], slabMat, 0.25, null, yC));
+    const pierGeo = new THREE.BoxGeometry(1, 1, 1), piers = [];
+    const ground = ['KA', 'YA', 'YB'];
+    for (let z = zA + 20; z < zB - 4; z += 16) {
+      const h = yC(z) - 0.95 - DECK;
+      if (h < 1.2) continue;
+      const x = cxC(z);
+      if (ground.some(l => Math.abs(lineXAt(l, z) - x) < 2.3)) continue;   // never on a track
+      const g1 = pierGeo.clone().scale(0.9, h, 1.2).translate(x, DECK + h / 2, z);
+      const g2 = pierGeo.clone().scale(9.5, 0.9, 1.4).translate(x, DECK + h - 0.45, z);   // hammerhead
+      piers.push(g1, g2);
+    }
+    const pm = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(piers), slabMat);
+    pm.castShadow = pm.receiveShadow = true; scene.add(pm); platBits.push(pm);
   }
   pillars.instanceMatrix.needsUpdate = true;
   pillars.castShadow = true;
@@ -1763,12 +1865,12 @@ const PLAT_INFO = [
     const info = PLAT_INFO[i];
     const mat = new THREE.MeshBasicMaterial({ map: signTex(info), side: THREE.DoubleSide });
     for (const dz of [-55, 55]) {
-      const z = p.off + dz, x = p.x + bendFor(p.bw, z);
+      const z = p.off + dz, x = platX(p, z), Y = platY(p);
       const board = new THREE.Mesh(new THREE.PlaneGeometry(3.0, 0.8), mat);
-      board.position.set(x, DECK + PLAT_Y + 2.6, z);  // face down the platform
+      board.position.set(x, Y + PLAT_Y + 2.6, z);  // face down the platform
       scene.add(board);
       const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.9, 0.1), postMat);
-      post.position.set(x, DECK + PLAT_Y + 3.45, z); scene.add(post);
+      post.position.set(x, Y + PLAT_Y + 3.45, z); scene.add(post);
       signBits.push(board, post);
     }
   });
@@ -1905,7 +2007,11 @@ const WIRE_CONTACT = DECK + 6.0; // contact wire (what the pantograph touches)
   const footGeo = new THREE.BoxGeometry(1.0, 0.8, 1.0);
   for (let z = -740; z <= 740; z += GANTRY_STEP) {
     const { left, right } = corridorEdges(z);
-    const xL = left - 1.6, xR = right + 1.6;
+    let xL = left - 1.6;
+    const xR = right + 1.6;
+    // where the Chuo upper deck runs, the portal starts east of it
+    if (lineY('CH1', z) > DECK + 1 && z < LINES.CH1.buf + 12)
+      xL = Math.max(xL, (lineXAt('CH1', z) + lineXAt('CH2', z)) / 2 + 7.6);
     const list = [];
     latticeLeg(list, xL, z, DECK, WIRE_TOP + 1.4, 0.45);
     latticeLeg(list, xR, z, DECK, WIRE_TOP + 1.4, 0.45);
@@ -1934,8 +2040,9 @@ const WIRE_CONTACT = DECK + 6.0; // contact wire (what the pantograph touches)
       // messenger sags as a parabola within each gantry span
       const ph = ((z - zFrom) % span) / span;
       const sag = 0.5 * 4 * ph * (1 - ph);   // up to ~0.5m mid-span
-      mPts.push(new THREE.Vector3(x, WIRE_TOP - sag, z));
-      cPts.push(new THREE.Vector3(x, WIRE_CONTACT, z));
+      const dy = lineY(line, z) - DECK;
+      mPts.push(new THREE.Vector3(x, WIRE_TOP - sag + dy, z));
+      cPts.push(new THREE.Vector3(x, WIRE_CONTACT + dy, z));
     }
     const mk = (pts, r) => new THREE.Mesh(
       new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), pts.length, r, 3, false), wireMat);
@@ -1948,7 +2055,7 @@ const WIRE_CONTACT = DECK + 6.0; // contact wire (what the pantograph touches)
       const ph = ((z - zFrom) % span) / span;
       const top = WIRE_TOP - 0.5 * 4 * ph * (1 - ph);
       const g = new THREE.CylinderGeometry(0.018, 0.018, top - WIRE_CONTACT, 3, 1, true);
-      g.translate(x, (top + WIRE_CONTACT) / 2, z);
+      g.translate(x, (top + WIRE_CONTACT) / 2 + lineY(line, z) - DECK, z);
       drops.push(g);
     }
     if (drops.length) detailGroup.add(new THREE.Mesh(BufferGeometryUtils.mergeGeometries(drops), dropMat));
@@ -1978,7 +2085,7 @@ detailGroup.add(props);
   const VEND_COLS = [0xd33b34, 0x2b6fd0, 0xe8e8e8, 0x16a34a, 0xf0a000];
   const PERSON_COLS = [0x33455f, 0x7a3b3b, 0x3b5e44, 0x5a4a6e, 0x444851, 0x8a6a3a];
   PLATFORMS.forEach((p) => {
-    const cx = z => p.x + bendFor(p.bw, z);
+    const cx = z => platX(p, z), surf = platY(p) + PLAT_Y;
     for (let k = 0; k < 3; k++) {
       const z = p.off - 32 + k * 1.1, x = cx(z) + 1.7;
       vendM.push(mat4(x, surf + 0.95, z, -Math.PI / 2));
@@ -2108,7 +2215,7 @@ const SIG_OFF = new THREE.Color(0x1c0f0f), SIG_RED = new THREE.Color(0xff2a1e), 
     pole.position.y = 2.1; g.add(pole);
     const head = new THREE.Mesh(headGeo, poleMat);
     head.position.y = 4.3; g.add(head);
-    g.position.set(lx + 1.9, DECK, z);
+    g.position.set(lx + 1.9, lineY(line, z), z);
     if (side === 'N') g.rotation.y = Math.PI;
     scene.add(g);
     g.updateMatrixWorld(true);
@@ -2299,7 +2406,7 @@ const station = new THREE.Group();
 
   // ---- centre: big slate pavilion roof, tall arched bay, twin turrets ----
   {
-    const z0 = -5.5 * P, z1 = 5.5 * P, x0 = -12, x1 = 9.2, H = 19.2;
+    const z0 = -5.5 * P, z1 = 5.5 * P, x0 = -12, x1 = 8.2, H = 19.2;
     block(x0, x1, z0, z1, H);
     cornice(x0, x1, z0, z1, H);
     quoins(x0, x1, z0, z1, H);
@@ -2330,7 +2437,7 @@ const station = new THREE.Group();
 
   // ---- towers half way out: white stone top storey, steep pyramid ----
   for (const s of [-1, 1]) {
-    const zc = s * 14 * P, z0 = zc - 1.5 * P, z1 = zc + 1.5 * P, x0 = -10.2, x1 = 8.6;
+    const zc = s * 14 * P, z0 = zc - 1.5 * P, z1 = zc + 1.5 * P, x0 = -10.2, x1 = 8.0;
     block(x0, x1, z0, z1, WALL);
     quoins(x0, x1, z0, z1, WALL);
     box(x1 - x0 + 0.3, 4, z1 - z0 + 0.3, stoneMat, (x0 + x1) / 2, WALL + 2, zc);
@@ -2343,7 +2450,7 @@ const station = new THREE.Group();
 
   // ---- low end pavilions ----
   for (const s of [-1, 1]) {
-    const zc = s * 35 * P, z0 = zc - 1.5 * P, z1 = zc + 1.5 * P, x0 = -9.4, x1 = 8.8, H = 17;
+    const zc = s * 35 * P, z0 = zc - 1.5 * P, z1 = zc + 1.5 * P, x0 = -9.4, x1 = 8.0, H = 17;
     block(x0, x1, z0, z1, H);
     quoins(x0, x1, z0, z1, H);
     cornice(x0, x1, z0, z1, H);
@@ -2358,7 +2465,7 @@ const station = new THREE.Group();
   for (let i = 0; i < 8; i++) ribGeos.push(new THREE.TubeGeometry(ribCurve(i / 8 * Math.PI * 2 + Math.PI / 8), 14, 0.14, 4));
   const ribGeo = BufferGeometryUtils.mergeGeometries(ribGeos);
   for (const s of [-1, 1]) {
-    const zc = s * 25 * P, z0 = zc - 4.5 * P, z1 = zc + 4.5 * P, x0 = -13.6, x1 = 10.2, H = 20.4, xc = -1.7;
+    const zc = s * 25 * P, z0 = zc - 4.5 * P, z1 = zc + 4.5 * P, x0 = -13.6, x1 = 8.0, H = 20.4, xc = -2.6;
     block(x0, x1, z0, z1, H);
     quoins(x0, x1, z0, z1, H);
     cornice(x0, x1, z0, z1, H);
@@ -2625,33 +2732,199 @@ const cityFar = new THREE.Group();
     if (b.heli) heliPads.push([(b.x0 + b.x1) / 2, b.h + 0.02, (b.z0 + b.z1) / 2, Math.min(w, d) * (b.taper ? 0.5 : 0.62)]);
   }
 
-  // everything else: rows of generic offices hugging the corridor and
-  // filling the blocks behind, skipping the landmarks, plaza and site
+  /* ---- everything else follows the street grid of the map ----
+     Marunouchi (west): the road along the plaza, Naka-dori, Hibiya-dori
+     by the palace moat, big blocks with 100–190m towers. Yaesu (east):
+     Sotobori-dori right behind the station frontage, then the fine
+     Nihonbashi/Kyobashi grid of small mid-rise blocks up to Chuo-dori.
+     Streets from the map at ≈0.5 m per map pixel. Big towers are single
+     buildings; the many small ones are merged per facade style and
+     district so they cost a handful of draw calls. */
+  const SOTO = z => 160 - 0.0625 * z;               // Sotobori-dori, tilted like the map
+  const NS_W = [[-137, 10], [-213, 14], [-299, 22]];
+  const EW_W = [[-720, 12], [-630, 12], [-545, 12], [-455, 14], [-385, 12], [-320, 12], [-263, 22], [-190, 12], [-121, 14],
+    [-8, 14], [68, 12], [177, 14], [278, 18], [347, 22], [410, 12], [480, 12], [560, 12], [640, 12], [730, 12]];
+  const NS_E = [[0, 20], [52, 10], [100, 10], [148, 18], [200, 10], [250, 10], [300, 10]];     // offsets from Sotobori-dori
+  const EW_E = [[-720, 12], [-620, 12], [-540, 12], [-455, 12], [-390, 12], [-330, 12], [-263, 22], [-205, 10], [-150, 10],
+    [-95, 10], [-40, 10], [15, 14], [70, 10], [125, 10], [180, 10], [235, 10], [293, 10], [347, 24], [410, 10], [470, 10],
+    [540, 12], [620, 12], [700, 12]];
+  // the Nihonbashi river (north-east), with the Shuto expressway over it
+  const RIVER = [[90, -505], [171, -460], [232, -430], [307, -384], [363, -339], [480, -300], [560, -285]];
+  const riverDist = (x, z) => {
+    let d = 1e9;
+    for (let i = 0; i < RIVER.length - 1; i++) {
+      const [ax, az] = RIVER[i], [bx, bz] = RIVER[i + 1], vx = bx - ax, vz = bz - az;
+      const t = Math.max(0, Math.min(1, ((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz)));
+      d = Math.min(d, Math.hypot(x - ax - vx * t, z - az - vz * t));
+    }
+    return d;
+  };
+  const clearOfRail = (x0, x1, z0, z1) => {
+    for (let z = z0; z <= z1; z += 6) { const e = corridorEdges(z); if (x1 > e.left - 6 && x0 < e.right + 6) return false; }
+    return true;
+  };
+  const lotOK = (x0, x1, z0, z1) => clearOfRail(x0, x1, z0, z1) && !hits(x0, x1, z0, z1, 3) &&
+    riverDist((x0 + x1) / 2, (z0 + z1) / 2) > 22 + Math.max(x1 - x0, z1 - z0) / 2;
+  const blockPave = [];
+  // blocks between consecutive streets
+  const blocksOf = (xs, zs) => {
+    const out = [];
+    for (let i = 0; i < zs.length - 1; i++) {
+      const z0 = zs[i][0] + zs[i][1] / 2, z1 = zs[i + 1][0] - zs[i + 1][1] / 2;
+      for (let j = 0; j < xs.length - 1; j++) {
+        const [xa, wa] = xs[j], [xb, wb] = xs[j + 1];
+        out.push([Math.min(xa, xb) + (xa < xb ? wa : wb) / 2, Math.max(xa, xb) - (xa < xb ? wb : wa) / 2, z0, z1]);
+      }
+    }
+    return out;
+  };
+  // Marunouchi: big blocks → one or two towers each
+  const westStrips = NS_W.slice();
+  westStrips.unshift([-60, 0]);                     // the strip up to the rail corridor
+  for (const [x0r, x1, z0, z1] of blocksOf(westStrips, EW_W)) {
+    let x0 = x0r, xe = x1;
+    if (xe > -137) {                                // corridor-side strip: stop short of the viaduct
+      let m = 1e9; for (let z = z0; z <= z1; z += 4) m = Math.min(m, corridorEdges(z).left - 7);
+      xe = Math.min(-137 + 5, m); x0 = -137 + 5; if (m < x0 + 10) continue;
+      xe = m;
+    }
+    const w = xe - x0, d = z1 - z0;
+    if (w < 10 || d < 10) continue;
+    const onPlaza = x0 < -50 && xe > PLAZA.x0 && z0 < PLAZA.z1 + 4 && z1 > PLAZA.z0 - 4;
+    if (!onPlaza) blockPave.push([x0 - 2, xe + 2, z0 - 2, z1 + 2]);
+    const parts = d > 100 ? 2 : 1;
+    for (let k = 0; k < parts; k++) {
+      const za = z0 + d * k / parts + 3, zb = z0 + d * (k + 1) / parts - 3, xa = x0 + 3, xb = xe - 3;
+      if (!lotOK(xa, xb, za, zb)) continue;
+      const near = Math.abs((za + zb) / 2) < 420;
+      const h = Math.min(190, (near ? 95 : 45) + rng() * (near ? 95 : 70));
+      const b = makeBuilding((xa + xb) / 2, (za + zb) / 2, xb - xa, zb - za, h, h > 80 && rng() < 0.6);
+      (xa > -150 ? cityNear : cityFar).add(b);
+    }
+  }
+  // Yaesu → Nihonbashi/Kyobashi: small lots, merged per style and district
+  const small = new Map();
+  const lotGeo = (x, z, w, d, h) => {
+    const g = new THREE.BoxGeometry(w, h, d), uv = g.attributes.uv;
+    const ox = (rng() * 40) | 0, oy = (rng() * 40) | 0;
+    for (let f = 0; f < 6; f++) for (let v = 0; v < 4; v++) {
+      const i = f * 4 + v;
+      if (f === 2 || f === 3) { uv.setXY(i, 0.004, 0.004); continue; }     // plain roof
+      const span = f < 2 ? d : w;
+      uv.setXY(i, ox + uv.getX(i) * span / 13, oy + uv.getY(i) * h / 15);
+    }
+    return g.translate(x, h / 2, z).toNonIndexed();
+  };
+  for (const [ox0, ox1, z0, z1] of blocksOf(NS_E, EW_E)) {
+    const zc = (z0 + z1) / 2, x0 = SOTO(zc) + ox0, x1 = SOTO(zc) + ox1, w = x1 - x0, d = z1 - z0;
+    if (w < 10 || d < 10) continue;
+    blockPave.push([x0 - 2, x1 + 2, z0 - 2, z1 + 2]);
+    const nx = Math.max(1, Math.round(w / 22)), nz = Math.max(1, Math.round(d / 22));
+    for (let a = 0; a < nx; a++) for (let c = 0; c < nz; c++) {
+      if (rng() < 0.08) continue;                   // the odd open lot
+      const xa = x0 + w * a / nx + 1, xb = x0 + w * (a + 1) / nx - 1, za = z0 + d * c / nz + 1, zb = z0 + d * (c + 1) / nz - 1;
+      if (!lotOK(xa, xb, za, zb)) continue;
+      let h = 18 + rng() * 38;
+      if (rng() < 0.12) h = 70 + rng() * 60;
+      const style = (rng() * 3) | 0, key = style + ':' + Math.floor(zc / 250);
+      if (!small.has(key)) small.set(key, []);
+      small.get(key).push(lotGeo((xa + xb) / 2, (za + zb) / 2, xb - xa, zb - za, h));
+    }
+  }
+  // the ring between the Yaesu frontage and Sotobori-dori, and anything
+  // north/south of the grids, keeps the old corridor-hugging fill
   for (const side of [-1, 1]) {
     let z = -720;
     while (z < 720) {
-      const d = 26 + rng() * 22;
-      const gap = 7 + rng() * 12;
-      const zC = z + d / 2;
-      const edges = corridorEdges(zC);
-      const rows = Math.abs(zC) < 460 ? 4 : 2;
+      const d = 26 + rng() * 22, gap = 7 + rng() * 12, zC = z + d / 2, edges = corridorEdges(zC);
       let xEdge = side < 0 ? edges.left - 9 : edges.right + 9;
-      for (let row = 0; row < rows; row++) {
-        const w = 20 + rng() * 18;
-        const street = row === 0 ? 0 : 8 + rng() * 8;
+      const limit = side < 0 ? -137 : SOTO(zC) - 10;
+      for (let row = 0; row < 2; row++) {
+        const w = 20 + rng() * 18, street = row === 0 ? 0 : 8 + rng() * 8;
         const x = side < 0 ? xEdge - street - w / 2 : xEdge + street + w / 2;
         xEdge = side < 0 ? x - w / 2 : x + w / 2;
-        let h = 35 + rng() * 75;
-        if (Math.abs(zC) < 280) h *= 1.3;
-        if (rng() < 0.15) h *= 1.5;
-        h = Math.min(175, Math.max(28, h));
-        const taper = rng() < 0.45;
-        if (hits(x - w / 2, x + w / 2, zC - d / 2 + 2, zC + d / 2 - 2)) continue;
-        const b = makeBuilding(x, zC, w, d - 4, h, taper);
-        (row === 0 ? cityNear : cityFar).add(b);
+        if (side < 0 ? x - w / 2 < limit : x + w / 2 > limit) break;
+        const h = Math.min(160, 40 + rng() * 80);
+        if (!lotOK(x - w / 2, x + w / 2, zC - d / 2 + 2, zC + d / 2 - 2)) continue;
+        cityNear.add(makeBuilding(x, zC, w, d - 4, h, rng() < 0.45));
       }
       z += d + gap;
     }
+  }
+  for (const [key, geos] of small) {
+    const mat = cityWindowMaterial(+key.split(':')[0], { roughness: 0.6, metalness: 0.1 });
+    setFacadeRepeat(mat, 1, 1);
+    cityMats.push(mat);
+    const mesh = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(geos), mat);
+    mesh.castShadow = mesh.receiveShadow = true;
+    mesh.userData.noFade = true;
+    cityFar.add(mesh);
+  }
+  // pavements: every block is a slightly raised, lighter slab, so the
+  // streets read from above like on the map
+  {
+    const geos = blockPave.map(([x0, x1, z0, z1]) => new THREE.BoxGeometry(x1 - x0, 0.16, z1 - z0).translate((x0 + x1) / 2, 0.08, (z0 + z1) / 2));
+    const pave = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(geos), new THREE.MeshStandardMaterial({ color: 0xa9a69f, roughness: 1 }));
+    pave.receiveShadow = true; pave.userData.noFade = true;
+    cityFar.add(pave);
+  }
+  // the palace moat and gardens beyond Hibiya-dori
+  {
+    const water = new THREE.MeshStandardMaterial({ color: 0x2f5a62, roughness: 0.12, metalness: 0.25 });
+    const stone = new THREE.MeshStandardMaterial({ color: 0x8e8a80, roughness: 0.95 });
+    const green = new THREE.MeshStandardMaterial({ color: 0x5d8f4c, roughness: 1 });
+    const g = [], s2 = [], gr = [];
+    for (const [za, zb] of [[-760, -24], [8, 760]]) {
+      g.push(new THREE.BoxGeometry(80, 0.1, zb - za).translate(-352, -0.2, (za + zb) / 2));
+      for (const x of [-311, -393]) s2.push(new THREE.BoxGeometry(2.2, 2.4, zb - za).translate(x, 0.2, (za + zb) / 2));
+    }
+    gr.push(new THREE.BoxGeometry(460, 0.12, 1520).translate(-625, 0.06, 0));      // palace grounds
+    gr.push(new THREE.BoxGeometry(80, 0.12, 32).translate(-352, 0.06, -8));        // the Gyoko-dori crossing
+    for (const [list, mat] of [[g, water], [s2, stone], [gr, green]]) {
+      const m = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(list), mat);
+      m.receiveShadow = true; m.userData.noFade = true; cityFar.add(m);
+    }
+    // pine clusters on the palace side
+    const trunkGeo = new THREE.CylinderGeometry(0.3, 0.4, 4, 6), crownGeo = new THREE.SphereGeometry(4, 8, 6);
+    const pts = [];
+    for (let i = 0; i < 220; i++) pts.push([-405 - rng() * 420, -740 + rng() * 1480]);
+    const trunks = new THREE.InstancedMesh(trunkGeo, new THREE.MeshStandardMaterial({ color: 0x5a4634 }), pts.length);
+    const crowns = new THREE.InstancedMesh(crownGeo, new THREE.MeshStandardMaterial({ color: 0x3f6e3a, roughness: 0.95 }), pts.length);
+    const tm = new THREE.Matrix4();
+    pts.forEach(([x, z], i) => {
+      const k = 0.7 + rng() * 0.8;
+      trunks.setMatrixAt(i, tm.makeScale(k, k, k).setPosition(x, 2 * k, z));
+      crowns.setMatrixAt(i, tm.makeScale(k, k * 0.8, k).setPosition(x, 5.5 * k, z));
+    });
+    trunks.userData.noFade = crowns.userData.noFade = true;
+    crowns.castShadow = true;
+    cityFar.add(trunks, crowns);
+  }
+  // the Nihonbashi river with the Shuto expressway riding over it, and
+  // the Tokyo Expressway crossing the tracks south of the station
+  {
+    const water = new THREE.MeshStandardMaterial({ color: 0x33575c, roughness: 0.15, metalness: 0.2 });
+    const road = new THREE.MeshStandardMaterial({ color: 0x77787a, roughness: 0.9 });
+    const wg = [], rg = [];
+    for (let i = 0; i < RIVER.length - 1; i++) {
+      const [ax, az] = RIVER[i], [bx, bz] = RIVER[i + 1], len = Math.hypot(bx - ax, bz - az), ang = Math.atan2(bx - ax, bz - az);
+      wg.push(new THREE.BoxGeometry(26, 0.1, len + 26).rotateY(ang).translate((ax + bx) / 2, -0.2, (az + bz) / 2));
+      rg.push(new THREE.BoxGeometry(18, 1.2, len + 2).rotateY(ang).translate((ax + bx) / 2, 13, (az + bz) / 2));
+      for (let k = 0; k < len; k += 32) rg.push(new THREE.BoxGeometry(2, 12.4, 2).translate(ax + (bx - ax) * k / len, 6.2, az + (bz - az) * k / len));
+    }
+    // KK line: an elevated deck over the yard, clear of the catenary
+    const zK = 347;
+    rg.push(new THREE.BoxGeometry(900, 1.4, 20).translate(40, 21, zK));
+    for (let x = -400; x <= 480; x += 34) {
+      const e = corridorEdges(zK);
+      if (x > e.left - 4 && x < e.right + 4) continue;
+      rg.push(new THREE.BoxGeometry(2.4, 20.3, 2.4).translate(x, 10.2, zK));
+    }
+    const wm = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(wg), water);
+    const rm = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(rg), road);
+    rm.castShadow = true; rm.receiveShadow = wm.receiveShadow = true;
+    wm.userData.noFade = rm.userData.noFade = true;
+    cityFar.add(wm, rm);
   }
 
   // the Yaesu frontage: extruded footprints hugging the viaduct
@@ -3921,11 +4194,7 @@ function addTrain(typeKey, line, dir, phase, terminal = false) {
   {
     const zStop = t.route.posAt(t.sStop - t.len / 2, _p).z;
     const lx = lineXAt(line, zStop);
-    let best = null, bd = 1e9;
-    for (const p of PLATFORMS) {
-      const px = p.x + bendFor(p.bw, zStop), d = Math.abs(px - lx);
-      if (d < bd) { bd = d; best = px; }
-    }
+    const best = platX(platformOf(line), zStop);
     t.platSideWorld = Math.sign(best - lx) || 1;
     t.platSideLocal = t.platSideWorld * (dir > 0 ? 1 : -1);
   }
@@ -4082,7 +4351,7 @@ const crowd = (() => {
     const cx = camera.position.x, cz = camera.position.z;
     people.forEach((p, i) => {
       const moving = p.delay <= 0 && Math.hypot(p.tx - p.x, p.tz - p.z) > 0.05;
-      _o.position.set(p.x, DECK + PLAT_Y + 0.82 + (moving ? Math.abs(Math.sin(p.ph)) * 0.06 : 0), p.z);
+      _o.position.set(p.x, p.t.cars[0].position.y + PLAT_Y + 0.82 + (moving ? Math.abs(Math.sin(p.ph)) * 0.06 : 0), p.z);
       _o.rotation.set(0, Math.atan2(cx - p.x, cz - p.z), 0);
       _o.updateMatrix();
       im.setMatrixAt(i, _o.matrix);
@@ -4162,8 +4431,8 @@ function placeCars(t) {
     const s = t.sHead - t.carOff[i];
     t.route.posAt(s, _p);
     const car = t.cars[i];
-    car.position.set(_p.x, DECK, _p.z);
-    car.rotation.set(0, _p.yaw, 0);
+    car.position.set(_p.x, _p.y, _p.z);
+    car.rotation.set(-_p.pitch, _p.yaw, 0, 'YXZ');
     car.updateMatrix();
     // bogies read the track
     const [zA, zB] = t.bogieZ[i];
@@ -5051,23 +5320,25 @@ function shotPose(t, shot, P, T, A) {
     return;
   }
   const vis = t.group.visible;
+  // the train's own rail level (the Chuo Line runs on the upper deck)
+  const TD = lineY(t.line, t.route.posAt(t.sStop - t.len / 2, _rp).z);
   if (shot === 'plat') {
     // eye level on the platform, a few metres past where the cab stops,
     // looking back up the line at the arriving train
     frameAt(t, t.sStop, _fb, 1);
     const [px, pz] = perp(_fb, t.platSideWorld);
     A.set(0, 0, 0);
-    P.set(_fb.x + _fb.fx * 7 + px * 2.3, DECK + PLAT_Y + 1.35, _fb.z + _fb.fz * 7 + pz * 2.3);
+    P.set(_fb.x + _fb.fx * 7 + px * 2.3, TD + PLAT_Y + 1.35, _fb.z + _fb.fz * 7 + pz * 2.3);
     if (vis && t.state === 'enter') {
       frameAt(t, leadS(t), _fa);
-      T.set(_fa.x, DECK + 2.1, _fa.z);
+      T.set(_fa.x, TD + 2.1, _fa.z);
     } else if (vis && t.state !== 'depart' && t.state !== 'departRev') {
-      T.set(_fb.x - _fb.fx * 18, DECK + 2.1, _fb.z - _fb.fz * 18);
+      T.set(_fb.x - _fb.fx * 18, TD + 2.1, _fb.z - _fb.fz * 18);
     } else if (vis) {
       frameAt(t, t.sHead - t.len / 2, _fa, 1);
-      T.set(_fa.x, DECK + 2.1, _fa.z);
+      T.set(_fa.x, TD + 2.1, _fa.z);
     } else {
-      T.set(_fb.x - _fb.fx * 120, DECK + 3, _fb.z - _fb.fz * 120);
+      T.set(_fb.x - _fb.fx * 120, TD + 3, _fb.z - _fb.fz * 120);
     }
     return;
   }
@@ -5081,16 +5352,16 @@ function shotPose(t, shot, P, T, A) {
     // just inside the flat cab front (commuters)
     const eye = shink ? SHINK[t.type.profile].cabEye : [-0.45, 3.25];
     frameAt(t, ls - sg * eye[0], _fb);
-    P.set(_fb.x, DECK + eye[1], _fb.z);
+    P.set(_fb.x, TD + eye[1], _fb.z);
     frameAt(t, ls + sg * 70, _fb);
-    T.set(_fb.x, DECK + 2.2, _fb.z);
+    T.set(_fb.x, TD + 2.2, _fb.z);
     return;
   }
   if (shot === 'nose') {
     const [px, pz] = perp(_fa, yardSide(_fa.x, _fa.z));
     const kk = Math.min(k, 1.25);
-    T.set(_fa.x - _fa.fx * 12, DECK + 2.2, _fa.z - _fa.fz * 12);
-    P.set(_fa.x + _fa.fx * 24 * kk + px * 10, DECK + 3.6, _fa.z + _fa.fz * 24 * kk + pz * 10);
+    T.set(_fa.x - _fa.fx * 12, TD + 2.2, _fa.z - _fa.fz * 12);
+    P.set(_fa.x + _fa.fx * 24 * kk + px * 10, TD + 3.6, _fa.z + _fa.fz * 24 * kk + pz * 10);
     return;
   }
   if (shot === 'side') {
@@ -5099,15 +5370,15 @@ function shotPose(t, shot, P, T, A) {
     // pacing alongside from a little above the canopies: trains on the
     // neighbouring tracks and platform pillars can't cut across the view
     // (a canopy in the way fades out like any other occluder)
-    T.set(_fb.x + _fb.fx * 4, DECK + 2.2, _fb.z + _fb.fz * 4);
-    P.set(_fb.x + px * 21 * k + _fb.fx * 9, DECK + 11.5, _fb.z + pz * 21 * k + _fb.fz * 9);
+    T.set(_fb.x + _fb.fx * 4, TD + 2.2, _fb.z + _fb.fz * 4);
+    P.set(_fb.x + px * 21 * k + _fb.fx * 9, TD + 11.5, _fb.z + pz * 21 * k + _fb.fz * 9);
     return;
   }
   // doors: from the platform, looking along the open doors to the cab
   frameAt(t, ls - sg * t.carLen * 1.7, _fb);
   const [px, pz] = perp(_fb, t.platSideWorld);
-  P.set(_fb.x + px * 3.0, DECK + PLAT_Y + 1.6, _fb.z + pz * 3.0);
-  T.set(_fa.x - _fa.fx * t.carLen * 0.35 - px * 0.6, DECK + 2.5, _fa.z - _fa.fz * t.carLen * 0.35 - pz * 0.6);
+  P.set(_fb.x + px * 3.0, TD + PLAT_Y + 1.6, _fb.z + pz * 3.0);
+  T.set(_fa.x - _fa.fx * t.carLen * 0.35 - px * 0.6, TD + 2.5, _fa.z - _fa.fz * t.carLen * 0.35 - pz * 0.6);
   if (k > 1) P.sub(T).multiplyScalar(1.15).add(T);
 }
 
@@ -5930,10 +6201,10 @@ new THREE.TextureLoader().load(
     const p = PLATFORMS[pIdx];
     const z = p.off + (Math.random() - 0.5) * (p.len - 24);
     const xOff = (Math.random() - 0.5) * 2.6;       // across the deck
-    bb.userData.cx = p.x + bendFor(p.bw, z) + xOff;
+    bb.userData.cx = platX(p, z) + xOff;
     bb.userData.cz = z;
     // bottom of the (leg-cut) cutout sits right on the platform surface
-    bb.position.set(bb.userData.cx, DECK + PLAT_Y + H / 2, z);
+    bb.position.set(bb.userData.cx, platY(p) + PLAT_Y + H / 2, z);
     bb.userData.y0 = bb.position.y; bb.userData.wave = 0;
     bb.castShadow = false;
     scene.add(bb);
