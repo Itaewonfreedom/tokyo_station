@@ -1036,6 +1036,7 @@ vec3 stationIrr(vec3 pv, vec3 nv) {
 }
 `;
 function patchStation(shader) {
+  patchCut(shader);
   shader.uniforms.uNight = stationU.uNight;
   shader.uniforms.uDark = stationU.uDark;
   shader.uniforms.uPlat = stationU.uPlat;
@@ -1101,58 +1102,94 @@ function mergeStatic(meshes, root, chunk = 0) {
 }
 
 /* ================================================================
-   Occlusion fading — buildings/roofs turn translucent when the camera
-   is inside them or when they block the view of a followed train
+   Seeing the train through what's in front of it — per pixel.
+   The old fader made a whole object (the entire brick station, one
+   bounding box) translucent whenever any of three sample points behind
+   it was hidden: alpha blending without depth writes then let the
+   station's own parts show through each other — the 240m copper ridge
+   strips on the slate roof ran across the screen as long teal lines —
+   and it rewrote every material's transparent/opacity/depthWrite.
+   Now occluder materials (station, platform roofs, the Chuo deck, city)
+   carry a small fragment test instead: a pixel is dropped only if it
+   lies IN FRONT of the subject being watched and inside a narrow cone
+   (a fixed screen-space circle) around it, with a dithered soft rim.
+   So only the part that really covers the train opens up; depth,
+   sorting, materials and shadows are untouched; nothing needs splitting.
+   Subjects are set after the camera is placed each frame (updateCut).
 ================================================================ */
-const fadeables = [];
-function registerFadeable(root) {
-  const mats = [];
+const cutU = {
+  uCutA: { value: new THREE.Vector4(0, -1e4, 0, 0) },   // xyz subject, w radius (m)
+  uCutB: { value: new THREE.Vector4(0, -1e4, 0, 0) },
+  uCutK: { value: 0 },                                  // 0 off … 1 fully open
+};
+const CUT_GLSL = `
+uniform vec4 uCutA, uCutB;
+uniform float uCutK;
+float cutCone(vec3 wp, vec4 S) {
+  vec3 d = wp - cameraPosition, s = S.xyz - cameraPosition;
+  float ls = length(s), ld = length(d);
+  if (S.w <= 0. || ls < 1.) return 0.;
+  float along = dot(d, s) / ls;
+  // only what is in front of the subject (a margin of its own size)
+  float front = clamp((ls - 0.5 * S.w - along) / (0.5 * S.w), 0., 1.);
+  float ang = length(cross(d, s)) / max(ld * ls, 1e-4);     // sin of the angle off the subject
+  float rad = min(S.w / ls, 0.6);
+  return front * (1. - smoothstep(rad * 0.84, rad, ang));
+}
+// interleaved-gradient noise in screen space: a fine, static threshold
+float cutDither(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
+`;
+function patchCut(shader) {
+  shader.uniforms.uCutA = cutU.uCutA; shader.uniforms.uCutB = cutU.uCutB; shader.uniforms.uCutK = cutU.uCutK;
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', '#include <common>\n#ifdef OCCLUDER\n' + CUT_GLSL + '#endif')
+    .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
+#ifdef OCCLUDER
+  if (uCutK > 0.002) {
+    vec3 cwp = cameraPosition + transpose(mat3(viewMatrix)) * (-vViewPosition);
+    float cm = max(cutCone(cwp, uCutA), cutCone(cwp, uCutB)) * uCutK;
+    if (cm > 0.001 && cm * 1.08 > cutDither(gl_FragCoord.xy) + 0.04) discard;
+  }
+#endif`);
+}
+// flag every material under root as an occluder (its own state untouched)
+const occluderMats = new Set();
+function markOccluder(root) {
   root.traverse(o => {
-    if (o.material) {
-      const ms = Array.isArray(o.material) ? o.material : [o.material];
-      for (const m of ms) if (!mats.includes(m)) mats.push(m);
+    if (!o.material) return;
+    for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+      if (!m.isMeshStandardMaterial || occluderMats.has(m)) continue;
+      m.defines = Object.assign({}, m.defines, { OCCLUDER: '' });
+      m.needsUpdate = true;
+      occluderMats.add(m);
     }
   });
-  const box = new THREE.Box3().setFromObject(root);
-  fadeables.push({ mats, box, value: 1, target: 1, applied: false });
 }
-
-const _fadeRay = new THREE.Ray();
-const _samplePts = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
-function updateFades(dt) {
-  for (const f of fadeables) f.target = 1;
-  for (const f of fadeables)
-    if (f.box.containsPoint(camera.position)) f.target = 0.1;
-  if (followTrain && followTrain.group.visible) {
-    // sample the head, middle and tail of the consist; fade any building
-    // that blocks the camera's view of ANY of them
-    const t = followTrain;
-    t.route.posAt(t.sHead - 4, _p);              _samplePts[0].set(_p.x, _p.y + 2.6, _p.z);
-    t.route.posAt(t.sHead - t.len / 2, _p);      _samplePts[1].set(_p.x, _p.y + 2.6, _p.z);
-    t.route.posAt(t.sHead - t.len + 4, _p);      _samplePts[2].set(_p.x, _p.y + 2.6, _p.z);
-    for (const f of fadeables) {
-      if (f.target < 1) continue;
-      for (const tp of _samplePts) {
-        const dist = camera.position.distanceTo(tp);
-        _fadeRay.origin.copy(camera.position);
-        _fadeRay.direction.copy(tp).sub(camera.position).normalize();
-        if (_fadeRay.intersectsBox(f.box) &&
-            f.box.distanceToPoint(camera.position) < dist - 1) { f.target = 0.14; break; }
-      }
+// after the camera moved: what is being watched → the two cut subjects.
+// The cone eases in/out (no popping) and is off for overviews, the cab
+// view (inside the train), and reflection captures.
+const _cA = new THREE.Vector3(), _cB = new THREE.Vector3();
+let cutTarget = 0;
+function updateCut(dt) {
+  const t = followTrain;
+  cutTarget = 0;
+  if (t && t.group.visible && rig.cur !== 'cab') {
+    // A: what the shot is looking at; B: the leading cab
+    _cA.copy(rig.manual ? controls.target : rig.tgt);
+    frameAt(t, leadS(t), _fa);
+    _cB.set(_fa.x, _fa.y + 2.2, _fa.z);
+    const dA = camera.position.distanceTo(_cA);
+    if (dA > 6) {
+      // radius grows a little with distance so a far view still shows a car
+      const rA = Math.max(6.5, dA * 0.07), dB = camera.position.distanceTo(_cB);
+      cutU.uCutA.value.set(_cA.x, _cA.y, _cA.z, rA);
+      cutU.uCutB.value.set(_cB.x, _cB.y, _cB.z, _cB.distanceTo(_cA) > 4 ? Math.max(5.5, dB * 0.06) : 0);
+      cutTarget = 1;
     }
   }
-  for (const f of fadeables) {
-    if (Math.abs(f.target - f.value) < 0.002 && f.applied && f.target === 1 && f.value > 0.998) continue;
-    f.value += (f.target - f.value) * Math.min(1, dt * 6);
-    if (f.target === 1 && f.value > 0.998) f.value = 1;
-    const transparent = f.value < 0.985;
-    for (const m of f.mats) {
-      m.transparent = transparent;
-      m.opacity = transparent ? f.value : 1;
-      m.depthWrite = f.value > 0.55;
-    }
-    f.applied = true;
-  }
+  const k = cutU.uCutK;
+  k.value += (cutTarget - k.value) * (1 - Math.exp(-dt / 0.18));
+  if (Math.abs(cutTarget - k.value) < 0.004) k.value = cutTarget;
 }
 
 /* ================================================================
@@ -1763,7 +1800,7 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null,
       roughness: kind === 'solar' ? 0.35 : 0.65, metalness: kind === 'solar' ? 0.3 : 0, side: THREE.DoubleSide,
       emissive: kind === 'solar' ? 0x7d8494 : roofColors[i], emissiveIntensity: 0.12 });
     const roof = sweepProfile(cx, zP0 - 2, zP1 + 2, archProfile, archMat, 0.25, roofTaper, Y);
-    registerFadeable(roof);
+    markOccluder(roof);
     platBits.push(
       sweepProfile(cx, zP0 - 2, zP1 + 2, eaveProfile, fasciaMat, 0.25, roofTaper, Y),
       sweepProfile(cx, zP0 - 2, zP1 + 2, eaveProfileR, fasciaMat, 0.25, roofTaper, Y),
@@ -1809,7 +1846,10 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null,
     }
     const pm = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(piers), slabMat);
     pm.castShadow = pm.receiveShadow = true; scene.add(pm); platBits.push(pm);
+    markOccluder(pm);
   }
+  // canopy edges and their lamp strips open up together with the roofs
+  markOccluder({ traverse: f => [fasciaMat, roofLightMat].forEach(material => f({ material })) });
   pillars.instanceMatrix.needsUpdate = true;
   pillars.castShadow = true;
   scene.add(pillars);
@@ -2505,7 +2545,7 @@ const station = new THREE.Group();
 }
 station.position.set(-62, 0, 0);
 scene.add(station);
-registerFadeable(station);
+markOccluder(station);
 
 /* ================================================================
    City generator — blocks hugging the rail corridor, dense and varied
@@ -3022,7 +3062,7 @@ const cityFar = new THREE.Group();
 scene.add(cityNear);
 scene.add(cityFar);
 for (const grp of [cityNear, cityFar])
-  for (const b of grp.children) if (!b.userData.noFade) registerFadeable(b);
+  markOccluder(grp);
 // buildings never move — stop three re-deriving their matrices every frame
 for (const grp of [cityNear, cityFar])
   grp.traverse(o => { o.matrixAutoUpdate = false; });
@@ -4392,6 +4432,13 @@ const trackV = (k, s) => (Math.sin(s * 0.861 + k) * 0.5 + Math.sin(s * 0.4793 + 
 const trackL = (k, s) => (Math.sin(s * 0.617 + k * 2.3) * 0.7 + Math.sin(s * 0.2311 + k * 0.9)) / 1.7;
 const jointSign = j => ((Math.sin(j * 12.9898) * 43758.5453) % 1 + 1) % 1 > 0.5 ? 1 : -1;
 // body response at a bogie: joint impulses of the last two joints crossed
+/* rail joints are fixed to the track: every JOINT_PITCH metres from a
+   per-line phase, counted along the line from its north end — the same
+   spot whichever way a train runs. The body bounce (here) and the 덜컹
+   sound (sound.update → rail hits) both read this one reference. */
+const JOINT_PITCH = 25;
+const jointPhase = line => (lineSeed(line) * 7.31) % JOINT_PITCH;
+const trackU = (t, s) => (t.dir > 0 ? s : t.route.S - s) - jointPhase(t.line);
 function jointBounce(A, sb, dir, v) {
   const jf = dir > 0 ? Math.floor(sb / 25) : Math.ceil(sb / 25);
   let h = 0, r = 0;
@@ -4430,7 +4477,8 @@ function placeCars(t) {
     const [zA, zB] = t.bogieZ[i];
     let yA = A.heave * trackV(k, s + zA), yB = A.heave * trackV(k, s + zB);
     let rl = A.roll * (trackL(k, s + zA) + trackL(k, s + zB)) / 2;
-    const [hA, rA] = jointBounce(A, s + zA, dir, v), [hB, rB] = jointBounce(A, s + zB, dir, v);
+    const du = dir * t.dir;     // direction of travel along the track's joint axis
+    const [hA, rA] = jointBounce(A, trackU(t, s + zA), du, v), [hB, rB] = jointBounce(A, trackU(t, s + zB), du, v);
     yA += A.joint * hA; yB += A.joint * hB; rl += A.jRoll * (rA + rB) / 2;
     // curve: a little cant into the bend, from the route curvature
     t.route.posAt(s + 6, _pa); t.route.posAt(s - 6, _pb2);
@@ -4466,6 +4514,7 @@ function despawn(t) {
   t.timer = t.typeKey === rig.selType ? 2 + Math.random() * 2 : 5 + Math.random() * 9;
   t.group.visible = false;
   t.doorK = t.doorTarget = 0;
+  sound.drop(t);                 // no rail hits left over from its last metres
 }
 
 /* ---------- the platform routine ----------
@@ -4585,14 +4634,7 @@ function updateTrain(t, dt) {
   if (t.group.visible && (t.state === 'dwell' || t.state === 'melody' || t.state === 'closing')
       && (t.rideK > 1e-4 || Math.abs(t.accF) > 1e-4)) placeCars(t);
   updateDoorMesh(t, dt);
-  // rail joints every 25m → 가땅고똥
-  if (t.group.visible && t.speed > 4) {
-    const j = Math.floor(t.sHead / 25);
-    if (j !== t.joint) {
-      t.joint = j;
-      sound.joint(t);
-    }
-  }
+  // (the 덜컹 of the rail joints is scheduled per axle in sound.update)
 }
 
 // start-up: so the very first screen already has trains in it, one train
@@ -4644,7 +4686,10 @@ function updateSignals() {
 ================================================================ */
 const sound = (() => {
   let ctx = null, on = false, hidden = false;
-  let master, bus, send, noiseBuf, brownBuf, ambience = null;
+  let master, bus, send, noiseBuf, brownBuf, ambience = null, compNode = null;
+  let hitBufs = null, railBus = null;          // rail-joint hits (see railHits)
+  const hitLive = new Map();                   // train → scheduled hit sources
+  let hitsMade = 0, hitsEnded = 0;
   const voices = new Map();           // train → continuous voice
   const _v = new THREE.Vector3(), _right = new THREE.Vector3();
   // the train being watched is the lead voice; everything else sits
@@ -4654,12 +4699,16 @@ const sound = (() => {
 
   function build() {
     const AC = window.AudioContext || window.webkitAudioContext;
-    ctx = new AC();
+    // (tests can hand in an OfflineAudioContext to render the mix faster than real time)
+    ctx = window.__audioCtx || new AC();
     // play through the iPhone silent switch once the user turned sound on
     try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
     const comp = ctx.createDynamicsCompressor();
-    comp.threshold.value = -16; comp.knee.value = 10; comp.ratio.value = 4;
-    comp.attack.value = 0.004; comp.release.value = 0.25;
+    // glue, not squash: a slower attack lets each 덜컹 land before the
+    // compressor reacts, so hits keep their punch over the rumble
+    comp.threshold.value = -12; comp.knee.value = 8; comp.ratio.value = 3;
+    comp.attack.value = 0.012; comp.release.value = 0.2;
+    compNode = comp;
     master = ctx.createGain(); master.gain.value = 0;
     master.connect(comp).connect(ctx.destination);
     bus = ctx.createGain(); bus.connect(master);
@@ -4684,6 +4733,11 @@ const sound = (() => {
       const d = noiseBuf.getChannelData(0);
       for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (d.length * 0.28));
     }
+    hitBufs = { c: [0, 1, 2, 3].map(i => makeHit('c', i)), s: [0, 1, 2, 3].map(i => makeHit('s', i)) };
+    // rail hits get their own (light) reverb send so the hall adds space
+    // without smearing the rhythm
+    railBus = ctx.createGain(); railBus.connect(bus);
+    const rw = ctx.createGain(); rw.gain.value = 0.22; railBus.connect(rw).connect(send);
     brownBuf = ctx.createBuffer(1, ctx.sampleRate * 3, ctx.sampleRate);
     {
       const d = brownBuf.getChannelData(0); let last = 0;
@@ -4698,7 +4752,7 @@ const sound = (() => {
   }
   function ensure() {
     if (!ctx) build();
-    if (ctx.state === 'suspended' && !hidden) ctx.resume();
+    if (ctx.state === 'suspended' && !hidden && !window.__audioCtx) ctx.resume();
   }
   // a voice output: node → panner → dry bus, plus a reverb send
   function out(pan = 0, wet = 0.2) {
@@ -4753,19 +4807,118 @@ const sound = (() => {
     o.in.gain.value = f ? Math.max(0.4, sp.att) : sp.att * 0.45;
     return o;
   }
-  function clack(delay, vol, o) {
-    const t0 = ctx.currentTime + delay;
-    const s = ctx.createBufferSource();
-    s.buffer = noiseBuf;
-    s.playbackRate.value = 0.9 + Math.random() * 0.25;
-    const f = ctx.createBiquadFilter();
-    f.type = 'bandpass';
-    f.frequency.value = 750 + Math.random() * 450;
-    f.Q.value = 1.1;
-    const g = ctx.createGain();
-    g.gain.value = vol;
-    s.connect(f).connect(g).connect(o.in);
-    s.start(t0);
+  /* ---- 덜컹: one wheelset over a rail joint ----
+     Pre-rendered once per vehicle kind (4 variants each), built from:
+     a short impact click (the wheel dropping onto the next rail end),
+     the low body resonance of bogie and car (≈80–200 Hz, a falling
+     "덩"), a mid-low knock (≈300–420 Hz — what a phone speaker can
+     actually play, so the rhythm survives on small speakers), a dull
+     lowpassed thud texture and a restrained rail ring. Shinkansen: a
+     heavier, softer, rounder knock with less metal. */
+  function makeHit(kind, v) {
+    const sr = ctx.sampleRate, n = (sr * 0.42) | 0, b = ctx.createBuffer(1, n, sr), d = b.getChannelData(0);
+    let seed = 1234 + v * 97 + (kind === 's' ? 5000 : 0);
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 2 - 1;
+    const S = kind === 's';
+    const j = k => 1 + (rnd() * 0.06) * k;
+    const f1 = (S ? 74 : 90) * j(1), f2 = (S ? 150 : 182) * j(1), f3 = (S ? 280 : 330) * j(1.4), f4 = f3 * 1.27, f5 = (S ? 640 : 760) * j(1.5);
+    const r1 = 1870 * j(2), r2 = 2710 * j(2);
+    const metal = S ? 0.018 : 0.045, click = S ? 0.22 : 0.38;
+    let p1 = 0, p2 = 0, lp = 0, prevN = 0, peak = 0;
+    for (let i = 0; i < n; i++) {
+      const t = i / sr;
+      p1 += 2 * Math.PI * f1 * (1 + 0.3 * Math.exp(-t / 0.018)) / sr;      // pitch drops as the knock settles
+      p2 += 2 * Math.PI * f2 * (1 + 0.15 * Math.exp(-t / 0.015)) / sr;
+      const nz = rnd();
+      lp += (nz - lp) * 0.11;                                                // ~850 Hz one-pole
+      // balance: the low body is felt, the 300–900 Hz knock carries the rhythm
+      const body = 0.55 * Math.sin(p1) * Math.exp(-t / (S ? 0.09 : 0.075)) + 0.5 * Math.sin(p2) * Math.exp(-t / 0.05);
+      const knock = 0.8 * Math.sin(2 * Math.PI * f3 * t) * Math.exp(-t / 0.036) + 0.42 * Math.sin(2 * Math.PI * f4 * t) * Math.exp(-t / 0.028)
+        + (S ? 0.16 : 0.28) * Math.sin(2 * Math.PI * f5 * t) * Math.exp(-t / 0.022);
+      const thud = lp * 1.8 * Math.exp(-t / 0.026);
+      const imp = (nz - prevN) * click * Math.exp(-t / 0.0035);               // differenced noise: bright, very short
+      const ring = metal * (Math.sin(2 * Math.PI * r1 * t) * Math.exp(-t / 0.11) + 0.6 * Math.sin(2 * Math.PI * r2 * t) * Math.exp(-t / 0.075));
+      prevN = nz;
+      const env = Math.min(1, t / 0.0012);                                   // no start click
+      d[i] = env * (body + knock + thud + imp + ring);
+      peak = Math.max(peak, Math.abs(d[i]));
+    }
+    for (let i = 0; i < n; i++) d[i] *= 0.9 / peak;
+    return b;
+  }
+  // one hit at a world point: own gain + pan, cleaned up when it ends
+  function railHit(t, when, x, y, z, vol, rate) {
+    const sp = spatial(x, y, z, 26);
+    const g0 = vol * sp.att;
+    if (g0 < 0.004) return;
+    const src = ctx.createBufferSource();
+    const set = hitBufs[t.type.shink ? 's' : 'c'];
+    src.buffer = set[(Math.random() * set.length) | 0];
+    src.playbackRate.value = rate * (0.97 + Math.random() * 0.06);
+    const g = ctx.createGain(); g.gain.value = g0;
+    let tail = g;
+    if (ctx.createStereoPanner) { const p = ctx.createStereoPanner(); p.pan.value = sp.pan; g.connect(p); tail = p; }
+    src.connect(g); tail.connect(railBus);
+    src.start(Math.max(ctx.currentTime, when));
+    hitsMade++;
+    let list = hitLive.get(t); if (!list) hitLive.set(t, list = []);
+    const rec = { src, end: when + 0.45 };
+    list.push(rec);
+    src.onended = () => {
+      hitsEnded++;
+      try { src.disconnect(); g.disconnect(); if (tail !== g) tail.disconnect(); } catch (e) {}
+      const L = hitLive.get(t); if (L) { const k = L.indexOf(rec); if (k >= 0) L.splice(k, 1); }
+    };
+  }
+  // cancel a train's pending hits (despawn, mute, hidden, reversal)
+  function dropHits(t) {
+    const L = hitLive.get(t); if (!L) return;
+    const now = ctx.currentTime;
+    for (const r of L) try { r.src.stop(now); } catch (e) {}
+    hitLive.delete(t);
+    t._axJ = null;
+  }
+  /* each frame: for every wheelset of an audible train, will it cross a
+     track joint within the next moment? Then schedule exactly that hit,
+     at that wheelset's position. Short horizon → nothing long-lived to
+     go stale when a train slows, stops, reverses or disappears. */
+  const HIT_HORIZON = 0.12, _hp = { x: 0, z: 0, yaw: 0, y: 0 };
+  let bgHits = [];
+  function railHits(dt, near) {
+    const now = ctx.currentTime, H = Math.max(HIT_HORIZON, dt * 1.6);
+    bgHits = bgHits.filter(x => x > now - 0.05);
+    for (const t of trains) {
+      const audible = on && !hidden && t.group.visible && t.speed > 1.2 && (t === focus || near.includes(t));
+      if (!audible) { if (hitLive.has(t) || t._axJ) dropHits(t); continue; }
+      const mv = t.state === 'departRev' ? -1 : 1, du = mv * t.dir, v = t.speed;
+      if (t._axDir !== du) { dropHits(t); t._axDir = du; }
+      // wheelsets: every bogie of every car, two axles each (type geometry)
+      if (!t._axles) {
+        const wb = t.type.shink ? 2.5 : 2.1, ax = [];
+        t.cars.forEach((c, i) => { for (const zb of t.bogieZ[i]) for (const a of [-wb / 2, wb / 2]) ax.push(-t.carOff[i] + zb + a); });
+        t._axles = ax;
+      }
+      if (!t._axJ) t._axJ = new Float64Array(t._axles.length).fill(NaN);
+      const lead = t === focus, kSpeed = Math.min(1, v / 22) ** 0.7;
+      const base = (lead ? 0.42 : 0.42 * 0.3) * (0.35 + 0.65 * kSpeed);
+      const rate = 0.9 + 0.12 * kSpeed;                         // a touch brighter when fast
+      for (let a = 0; a < t._axles.length; a++) {
+        const s = t.sHead + t._axles[a];
+        const u0 = trackU(t, s), u1 = u0 + du * v * H;
+        // next joint ahead in the direction of travel
+        const J = du > 0 ? Math.floor(u1 / JOINT_PITCH) : Math.ceil(u1 / JOINT_PITCH);
+        const uj = J * JOINT_PITCH;
+        if ((uj - u0) * du <= 0 || t._axJ[a] === J) continue;
+        t._axJ[a] = J;
+        const when = now + Math.abs(uj - u0) / v;
+        if (!lead) {                                            // background: keep the texture sparse
+          if (bgHits.filter(x => Math.abs(x - when) < 0.03).length >= 2) continue;
+          bgHits.push(when);
+        }
+        t.route.posAt(s + (uj - u0) * t.dir, _hp);             // where on the train's route that joint is
+        railHit(t, when, _hp.x, (_hp.y ?? DECK) + 0.4, _hp.z, base, rate);
+      }
+    }
   }
   function noiseBurst(delay, dur, vol, type, freq, q, o, attack = 0.02) {
     const t0 = ctx.currentTime + delay;
@@ -4818,12 +4971,13 @@ const sound = (() => {
     for (const s of v.o.stops) try { s.stop(now + 0.5); } catch (e) {}
     setTimeout(() => v.o.in.disconnect(), 700);
   }
+  const nearTrains = () => trains.filter(t => t.group.visible && t !== focus)
+    .map(t => [t, trainPos(t).distanceToSquared(camera.position)])
+    .sort((a, b) => a[1] - b[1]).slice(0, 2).map(a => a[0]);
   function updateVoices() {
     const now = ctx.currentTime;
     // continuous voices: the watched train + the two nearest others
-    const near = trains.filter(t => t.group.visible && t !== focus)
-      .map(t => [t, trainPos(t).distanceToSquared(camera.position)])
-      .sort((a, b) => a[1] - b[1]).slice(0, 2).map(a => a[0]);
+    const near = nearTrains();
     for (const t of trains) {
       const alive = on && !hidden && t.group.visible && (t === focus || near.includes(t));
       const p = alive ? trainPos(t) : null;
@@ -4836,8 +4990,8 @@ const sound = (() => {
       const braking = t.state === 'enter' && t.braked && spd > 0.5;
       if (v.o.pan) v.o.pan.pan.setTargetAtTime(sp.pan, now, 0.05);
       v.o.in.gain.setTargetAtTime(sp.att * fw(t), now, 0.1);
-      v.rg.gain.setTargetAtTime(spd > 0.3 ? 0.05 + 0.3 * k ** 1.3 : 0, now, 0.15);
-      v.lp.frequency.setTargetAtTime(140 + spd * 32, now, 0.1);
+      v.rg.gain.setTargetAtTime(spd > 0.3 ? 0.035 + 0.17 * k ** 1.3 : 0, now, 0.15);
+      v.lp.frequency.setTargetAtTime(120 + spd * 18, now, 0.1);
       const base = v.shink ? 30 : 42;
       v.m1.frequency.setTargetAtTime(base + spd * (v.shink ? 16 : 21), now, 0.05);
       v.bp.frequency.setTargetAtTime((base + spd * 21) * 3.2, now, 0.05);
@@ -4891,6 +5045,7 @@ const sound = (() => {
       } else if (ctx) {
         master.gain.setTargetAtTime(0, ctx.currentTime, 0.06);
         for (const t of [...voices.keys()]) killVoice(t);
+        for (const t of [...hitLive.keys()]) dropHits(t);
       }
       return on;
     },
@@ -4905,12 +5060,13 @@ const sound = (() => {
     setHidden(h) {
       hidden = h;
       if (!ctx) return;
-      if (h) { for (const t of [...voices.keys()]) killVoice(t); ctx.suspend(); }
+      if (h) { for (const t of [...voices.keys()]) killVoice(t); for (const t of [...hitLive.keys()]) dropHits(t); ctx.suspend(); }
       else if (on) ctx.resume();
     },
     update(dt) {
       if (!ctx || !on || hidden) return;
       updateVoices();
+      railHits(dt, nearTrains());
       if (ambience) {
         ambience.g.gain.setTargetAtTime(0.05 - nightBlend * 0.02, ctx.currentTime, 0.5);
         birdTimer -= dt;
@@ -4920,24 +5076,12 @@ const sound = (() => {
         }
       }
     },
-    // 가땅고똥: each car = two bogies × two axles; the rhythm stretches
-    // with speed, the whole run is placed where the joint is
-    joint(t) {
-      if (!on || hidden) return;
-      const speed = t.speed; if (speed < 3) return;
-      const p = trainPos(t), sp = spatial(p.x, DECK + 0.5, p.z, 48);
-      const vol = 0.22 * sp.att * fw(t);
-      if (vol < 0.01) return;
-      const o = out(sp.pan, 0.18);
-      const axle = 2.1 / speed, bogie = 6.9 / speed, carT = 20 / speed;
-      const n = Math.min(t.cars.length, 6);
-      for (let i = 0; i < n; i++) {
-        const b = i * carT;
-        clack(b, vol, o);                          // 가
-        clack(b + axle, vol * 0.85, o);            // 땅
-        clack(b + bogie, vol * 0.9, o);            // 고
-        clack(b + bogie + axle, vol * 0.78, o);    // 똥
-      }
+    // a train left the scene: cancel whatever rail hits it still had queued
+    drop(t) { if (ctx) dropHits(t); },
+    // test hook: live rail-hit nodes, totals, compressor gain reduction
+    stats() {
+      let live = 0; for (const L of hitLive.values()) live += L.length;
+      return { live, made: hitsMade, ended: hitsEnded, voices: voices.size, comp: compNode ? +compNode.reduction.toFixed(1) : 0 };
     },
     // departure melody (bell timbre, from the platform PA)
     jingle(t) {
@@ -5258,18 +5402,20 @@ const rig = {
   carry: new THREE.Vector3(), hasCarry: false,
 };
 let followTrain = null;        // the occlusion fader looks at this
-const _fa = { x: 0, z: 0, fx: 0, fz: 1 }, _fb = { x: 0, z: 0, fx: 0, fz: 1 }, _rp = { x: 0, z: 0, yaw: 0 };
+const _fa = { x: 0, y: 0, z: 0, fx: 0, fz: 1, slope: 0 }, _fb = { x: 0, y: 0, z: 0, fx: 0, fz: 1, slope: 0 }, _rp = { x: 0, z: 0, yaw: 0, y: 0, pitch: 0 };
 const runSign = t => (t.state === 'departRev' ? -1 : 1);
 const leadS = t => (runSign(t) > 0 ? t.sHead : t.sHead - t.len);
 function frameAt(t, s, out, sign = runSign(t)) {
   t.route.posAt(s, _rp);
   // direction from a 10m chord, so the frame doesn't twitch at every
-  // 2m route vertex
-  const x0 = _rp.x, z0 = _rp.z;
-  t.route.posAt(s + 5, _rp); const x1 = _rp.x, z1 = _rp.z;
+  // 2m route vertex. y is the rail level there (the Chuo ramp, the upper
+  // deck) — the track's own height, never the cars' ride bounce
+  const x0 = _rp.x, z0 = _rp.z, y0 = _rp.y;
+  t.route.posAt(s + 5, _rp); const x1 = _rp.x, z1 = _rp.z, y1 = _rp.y;
   t.route.posAt(s - 5, _rp);
   let fx = x1 - _rp.x, fz = z1 - _rp.z; const n = Math.hypot(fx, fz) || 1;
-  out.x = x0; out.z = z0; out.fx = fx / n * sign; out.fz = fz / n * sign;
+  out.x = x0; out.y = y0; out.z = z0; out.fx = fx / n * sign; out.fz = fz / n * sign;
+  out.slope = (y1 - _rp.y) / n * sign;          // rise per metre in the direction of travel
   return out;
 }
 // unit perpendicular (in XZ) whose x points toward `sx` (+1 / -1)
@@ -5282,7 +5428,9 @@ function autoShot(t) {
   switch (t.state) {
     case 'enter': return rig.cur === 'plat' || t.sStop - t.sHead < 240 ? 'plat' : 'nose';
     case 'dwell': case 'melody': case 'closing': return 'doors';
-    default: return 'side';
+    // departing / running / turning back: the leading face, from ahead
+    // and to the side (the real direction of travel — leadS / runSign)
+    default: return 'nose';
   }
 }
 function resolveShot(t) {
@@ -5312,48 +5460,65 @@ function shotPose(t, shot, P, T, A) {
     return;
   }
   const vis = t.group.visible;
-  // the train's own rail level (the Chuo Line runs on the upper deck)
-  const TD = lineY(t.line, t.route.posAt(t.sStop - t.len / 2, _rp).z);
   if (shot === 'plat') {
-    // eye level on the platform, a few metres past where the cab stops,
-    // looking back up the line at the arriving train
+    // eye level on the platform (its own level — the Chuo island is up on
+    // its deck), a few metres past where the cab stops, looking back up
+    // the line at the train wherever it really is (up or down the ramp)
     frameAt(t, t.sStop, _fb, 1);
+    const PY = platY(platformOf(t.line));
     const [px, pz] = perp(_fb, t.platSideWorld);
     A.set(0, 0, 0);
-    P.set(_fb.x + _fb.fx * 7 + px * 2.3, TD + PLAT_Y + 1.35, _fb.z + _fb.fz * 7 + pz * 2.3);
+    P.set(_fb.x + _fb.fx * 7 + px * 2.3, PY + PLAT_Y + 1.35, _fb.z + _fb.fz * 7 + pz * 2.3);
     if (vis && t.state === 'enter') {
       frameAt(t, leadS(t), _fa);
-      T.set(_fa.x, TD + 2.1, _fa.z);
+      T.set(_fa.x, _fa.y + 2.1, _fa.z);
     } else if (vis && t.state !== 'depart' && t.state !== 'departRev') {
-      T.set(_fb.x - _fb.fx * 18, TD + 2.1, _fb.z - _fb.fz * 18);
+      T.set(_fb.x - _fb.fx * 18, PY + 2.1, _fb.z - _fb.fz * 18);
     } else if (vis) {
       frameAt(t, t.sHead - t.len / 2, _fa, 1);
-      T.set(_fa.x, TD + 2.1, _fa.z);
+      T.set(_fa.x, _fa.y + 2.1, _fa.z);
     } else {
-      T.set(_fb.x - _fb.fx * 120, TD + 3, _fb.z - _fb.fz * 120);
+      frameAt(t, t.sStop - 120, _fa, 1);
+      T.set(_fb.x - _fb.fx * 120, _fa.y + 3, _fb.z - _fb.fz * 120);
     }
     return;
   }
   const ls = leadS(t), sg = runSign(t);
   frameAt(t, ls, _fa);
-  A.set(_fa.x, 0, _fa.z);
+  // the anchor rides with the leading cab, including its height on the
+  // ramp, so the framing climbs and dips with the track (not the bounce)
+  A.set(_fa.x, _fa.y, _fa.z);
   const k = portraitK();
   if (shot === 'cab') {
     const shink = !!t.type.shink;
     // driver's eye: in the cockpit behind the windscreen (Shinkansen) or
-    // just inside the flat cab front (commuters)
+    // just inside the flat cab front (commuters); looking down the line
+    // at the rail level 70m ahead, so the view tips with the gradient
     const eye = shink ? SHINK[t.type.profile].cabEye : [-0.45, 3.25];
     frameAt(t, ls - sg * eye[0], _fb);
-    P.set(_fb.x, TD + eye[1], _fb.z);
+    P.set(_fb.x, _fb.y + eye[1], _fb.z);
     frameAt(t, ls + sg * 70, _fb);
-    T.set(_fb.x, TD + 2.2, _fb.z);
+    T.set(_fb.x, _fb.y + 2.2, _fb.z);
     return;
   }
   if (shot === 'nose') {
-    const [px, pz] = perp(_fa, yardSide(_fa.x, _fa.z));
+    // ahead of the cab and off to the open side of the yard, looking back
+    // at the face; each point takes the rail level where it is
+    // which side: the open yard side, unless a train on a neighbouring
+    // track stands between that viewpoint and the face — then the other
+    // side (kept per train, so it doesn't flip back and forth)
     const kk = Math.min(k, 1.25);
-    T.set(_fa.x - _fa.fx * 12, TD + 2.2, _fa.z - _fa.fz * 12);
-    P.set(_fa.x + _fa.fx * 24 * kk + px * 10, TD + 3.6, _fa.z + _fa.fz * 24 * kk + pz * 10);
+    frameAt(t, ls - sg * 12, _fb);
+    T.set(_fb.x, _fb.y + 2.2, _fb.z);
+    const yLev = _fb.y;
+    frameAt(t, ls + sg * 24 * kk, _fb);
+    const pose = side => { const [px, pz] = perp(_fa, side); return [_fa.x + _fa.fx * 24 * kk + px * 10, Math.max(_fb.y, _fa.y) + 3.6, _fa.z + _fa.fz * 24 * kk + pz * 10]; };
+    const pref = yardSide(_fa.x, _fa.z);
+    if (t._noseSide === undefined || t._noseFor !== sg) { t._noseSide = pref; t._noseFor = sg; }
+    if (noseBlocked(t, pose(t._noseSide), _fa.x, yLev + 2.2, _fa.z) && !noseBlocked(t, pose(-t._noseSide), _fa.x, yLev + 2.2, _fa.z))
+      t._noseSide = -t._noseSide;
+    P.set(...pose(t._noseSide));
+    keepAboveGround(P);
     return;
   }
   if (shot === 'side') {
@@ -5362,18 +5527,45 @@ function shotPose(t, shot, P, T, A) {
     // pacing alongside from a little above the canopies: trains on the
     // neighbouring tracks and platform pillars can't cut across the view
     // (a canopy in the way fades out like any other occluder)
-    T.set(_fb.x + _fb.fx * 4, TD + 2.2, _fb.z + _fb.fz * 4);
-    P.set(_fb.x + px * 21 * k + _fb.fx * 9, TD + 11.5, _fb.z + pz * 21 * k + _fb.fz * 9);
+    T.set(_fb.x + _fb.fx * 4, _fb.y + 2.2, _fb.z + _fb.fz * 4);
+    P.set(_fb.x + px * 21 * k + _fb.fx * 9, _fb.y + 11.5, _fb.z + pz * 21 * k + _fb.fz * 9);
+    keepAboveGround(P);
     return;
   }
-  // doors: from the platform, looking along the open doors to the cab
+  // doors: from the platform (its own level), looking along the open
+  // doors to the cab
   frameAt(t, ls - sg * t.carLen * 1.7, _fb);
   const [px, pz] = perp(_fb, t.platSideWorld);
-  P.set(_fb.x + px * 3.0, TD + PLAT_Y + 1.6, _fb.z + pz * 3.0);
-  T.set(_fa.x - _fa.fx * t.carLen * 0.35 - px * 0.6, TD + 2.5, _fa.z - _fa.fz * t.carLen * 0.35 - pz * 0.6);
+  P.set(_fb.x + px * 3.0, _fb.y + PLAT_Y + 1.6, _fb.z + pz * 3.0);
+  T.set(_fa.x - _fa.fx * t.carLen * 0.35 - px * 0.6, _fa.y + 2.5, _fa.z - _fa.fz * t.carLen * 0.35 - pz * 0.6);
   if (k > 1) P.sub(T).multiplyScalar(1.15).add(T);
 }
-
+// is another visible train standing across the sight line camera → face?
+function noseBlocked(t, P, fx, fy, fz) {
+  const dx = fx - P[0], dz = fz - P[2], L = Math.hypot(dx, dz) || 1;
+  let hit = false;
+  for (const o of trains) {
+    if (o === t || !o.group.visible) continue;
+    o.cars.forEach((c, i) => {
+      const yaw = c.rotation.y, hl = o.carLens[i] / 2;
+      for (const off of [-hl * 0.7, 0, hl * 0.7]) {               // a car is long: sample along it
+        const cx = c.position.x + Math.sin(yaw) * off - P[0], cz = c.position.z + Math.cos(yaw) * off - P[2];
+        const along = (cx * dx + cz * dz) / L;
+        if (along < 2 || along > L - 2) continue;
+        if (Math.abs(cx * dz - cz * dx) / L < 2.2 && Math.abs(c.position.y - fy + 2.2) < 3) { hit = true; return; }
+      }
+    });
+    if (hit) return true;
+  }
+  return false;
+}
+// never below the surface under the camera: the viaduct deck inside the
+// rail corridor, the street outside it
+function keepAboveGround(P) {
+  const e = corridorEdges(P.z);
+  const floor = (P.x > e.left - 1 && P.x < e.right + 1 ? DECK : 0) + 1.8;
+  if (P.y < floor) P.y = floor;
+}
 /* ---------- auto director ----------
    Chooses what's worth watching from the actual timetable: a train
    rolling in beats one standing still, a departure beats a dwell. It
@@ -5476,13 +5668,15 @@ function updateRig(dt, now) {
     if (followTrain) {
       frameAt(followTrain, leadS(followTrain), _fa);
       if (rig.hasCarry) {
-        const dx = _fa.x - rig.carry.x, dz = _fa.z - rig.carry.z;
-        if (Math.hypot(dx, dz) < 30) {
-          camera.position.x += dx; camera.position.z += dz;
-          controls.target.x += dx; controls.target.z += dz;
+        // carry the user's own framing along with the train — up and down
+        // the Chuo ramp too, so the composition they made stays put
+        const dx = _fa.x - rig.carry.x, dy = _fa.y - rig.carry.y, dz = _fa.z - rig.carry.z;
+        if (Math.hypot(dx, dz) < 30 && Math.abs(dy) < 5) {
+          camera.position.x += dx; camera.position.y += dy; camera.position.z += dz;
+          controls.target.x += dx; controls.target.y += dy; controls.target.z += dz;
         }
       }
-      rig.carry.set(_fa.x, 0, _fa.z); rig.hasCarry = true;
+      rig.carry.set(_fa.x, _fa.y, _fa.z); rig.hasCarry = true;
     } else rig.hasCarry = false;
     controls.update();
     if (now - rig.lastTouch > 60) exitManual(true);
@@ -6062,9 +6256,11 @@ trainProbe = (() => {
       trains.forEach(t => { t.group.visible = false; });
       const sp = skyGroup.position.clone();
       skyGroup.position.copy(cc.position);
-      const auto = renderer.shadowMap.autoUpdate;
+      const auto = renderer.shadowMap.autoUpdate, ck = cutU.uCutK.value;
       renderer.shadowMap.autoUpdate = false;           // reuse this frame's shadow map
+      cutU.uCutK.value = 0;                            // reflections see the whole station
       cc.update(renderer, scene);
+      cutU.uCutK.value = ck;
       renderer.shadowMap.autoUpdate = auto;
       skyGroup.position.copy(sp);
       trains.forEach((t, i) => { t.group.visible = vis[i]; });
@@ -6300,13 +6496,14 @@ function step(dt) {
   updateClock();
   slowAcc += dt;
   if (slowAcc >= 0.08) {
-    updateSignals(); updateFades(slowAcc); slowAcc = 0;
+    updateSignals(); slowAcc = 0;
     // LOD: drop the little platform props from high/satellite views
     // (where they'd be sub-pixel anyway)
     props.visible = camera.position.y < 90;
   }
   updateRig(dt, simNow);
   camera.updateMatrixWorld();
+  updateCut(dt);                  // after the camera and world matrices are final
   updateCameo(dt);
   updateFlashes(dt);
   crowd.update(dt);
@@ -6354,11 +6551,12 @@ function animate(now = performance.now()) {
 }
 animate();
 if (/[?&]debug\b/.test(location.search)) window.__sim = {
-  renderer, scene, camera, controls, trains, THREE, placeCars, setTravel, fadeables, LINES, lineSpan, lineXAt, trunkOf,
+  renderer, scene, camera, controls, trains, THREE, placeCars, setTravel, cutU, LINES, lineSpan, lineXAt, trunkOf,
   get timeScale() { return timeScale; }, set timeScale(v) { timeScale = v; },
   simulate(sec) {        // run the dispatcher headless (tests)
     for (let k = 0; k < sec / 0.05; k++) { for (const t of trains) updateTrain(t, 0.05); sound.update(0.05); }
   },
+  sound, get follow() { return followTrain; }, set follow(t) { followTrain = t; },
   run(sec, fps = 30) {   // fast-forward everything (trains, camera, UI) at a fixed step
     for (let k = 0; k < sec * fps; k++) step(1 / fps);
     ui.refresh();
