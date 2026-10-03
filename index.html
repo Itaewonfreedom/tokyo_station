@@ -1179,7 +1179,11 @@ function updateCut(dt) {
     frameAt(t, leadS(t), _fa);
     _cB.set(_fa.x, _fa.y + 2.2, _fa.z);
     const dA = camera.position.distanceTo(_cA);
-    if (dA > 6) {
+    // only when the view is actually aimed at this train (a free view
+    // looking elsewhere — or from far above — opens nothing)
+    let near = 1e9;
+    for (const c of t.cars) near = Math.min(near, c.position.distanceTo(_cA));
+    if (dA > 6 && dA < 260 && near < 30) {
       // radius grows a little with distance so a far view still shows a car
       const rA = Math.max(6.5, dA * 0.07), dB = camera.position.distanceTo(_cB);
       cutU.uCutA.value.set(_cA.x, _cA.y, _cA.z, rA);
@@ -3063,9 +3067,12 @@ scene.add(cityNear);
 scene.add(cityFar);
 for (const grp of [cityNear, cityFar])
   markOccluder(grp);
-// buildings never move — stop three re-deriving their matrices every frame
-for (const grp of [cityNear, cityFar])
+// buildings never move — bake their matrices once (each building group was
+// placed with .position), then stop three re-deriving them every frame
+for (const grp of [cityNear, cityFar]) {
+  grp.updateMatrixWorld(true);
   grp.traverse(o => { o.matrixAutoUpdate = false; });
+}
 
 /* ================================================================
    Trains
