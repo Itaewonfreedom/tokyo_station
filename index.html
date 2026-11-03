@@ -1156,7 +1156,7 @@ function patchCut(shader) {
 const occluderMats = new Set();
 function markOccluder(root) {
   root.traverse(o => {
-    if (!o.material) return;
+    if (!o.material || (o.userData && o.userData.noOcclude)) return;
     for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
       if (!m.isMeshStandardMaterial || occluderMats.has(m)) continue;
       m.defines = Object.assign({}, m.defines, { OCCLUDER: '' });
@@ -2731,6 +2731,8 @@ function setFacadeRepeat(mat, rx, ry) {
   mat.map.repeat.set(rx, ry);
   mat.emissiveMap.repeat.set(rx, ry);
 }
+let traffic = null;            // street vehicles (built with the city)
+const lampHeadMat = new THREE.MeshBasicMaterial({ color: 0x9a9890 });   // street-lamp heads: lit with the city
 const cityNear = new THREE.Group();
 const cityFar = new THREE.Group();
 {
@@ -3142,6 +3144,276 @@ const cityFar = new THREE.Group();
     cm.castShadow = true;
     lot.userData.noFade = hm.userData.noFade = cm.userData.noFade = true;
     cityNear.add(hm, cm);
+  }
+  /* ---- street traffic ----
+     The same street grid the blocks were cut from becomes a road graph:
+     intersections are nodes, street pieces are edges (any piece that would
+     run through a building, the station plaza or the pedestrian Gyoko-dori
+     is left out). Cars keep left (Japan), follow the car ahead, and stop at
+     each crossing on red — the two axes take turns every ~20s. Taxis and
+     buses circle the two station-front roundabouts; more traffic runs on
+     the elevated Shuto and Tokyo expressways. Everything is instanced:
+     five draw calls for all vehicles. */
+  {
+    const nodes = [], edges = [], key = new Map();
+    const node = (x, z) => { const k = x.toFixed(1) + ',' + z.toFixed(1); if (key.has(k)) return key.get(k);
+      const n = { x, z, e: [], ph: Math.random() * 40 }; nodes.push(n); key.set(k, n); return n; };
+    const roadBlock = [...LM.map(b => [b.x0, b.x1, b.z0, b.z1]), ...hug.map(b => [b.x0, b.x1, b.z0, b.z1]),
+      [GR.x0, GR.x1, GR.z0, GR.z1], [SITE.x0, SITE.x1, SITE.z0, SITE.z1], [PLAZA.x0 - 3, -50, PLAZA.z0 - 3, PLAZA.z1 + 3], [PLAZA.x0 - 130, PLAZA.x0, -9, 9]];
+    const clearRoad = (a, b) => {
+      const L = Math.hypot(b.x - a.x, b.z - a.z);
+      for (let d = 0; d <= L; d += 3) {
+        const x = a.x + (b.x - a.x) * d / L, z = a.z + (b.z - a.z) * d / L;
+        if (roadBlock.some(([x0, x1, z0, z1]) => x > x0 - 1 && x < x1 + 1 && z > z0 - 1 && z < z1 + 1)) return false;
+        const e = corridorEdges(z); if (x > e.left - 3 && x < e.right + 3) return false;
+      }
+      return true;
+    };
+    const link = (a, b, axis, w) => { if (a === b || !clearRoad(a, b)) return;
+      const e = { a, b, axis, w, len: Math.hypot(b.x - a.x, b.z - a.z), dx: (b.x - a.x), dz: (b.z - a.z) };
+      e.dx /= e.len; e.dz /= e.len; edges.push(e); a.e.push(e); b.e.push(e); };
+    // Marunouchi: N-S avenues × E-W streets
+    const zsW = EW_W.map(q => q[0]).filter(z => z > -700 && z < 700);
+    for (const [x, w] of NS_W) for (let j = 0; j < zsW.length - 1; j++) link(node(x, zsW[j]), node(x, zsW[j + 1]), 'ns', w);
+    for (const [z, w] of EW_W) { if (z <= -700 || z >= 700) continue;
+      for (let i = 0; i < NS_W.length - 1; i++) link(node(NS_W[i][0], z), node(NS_W[i + 1][0], z), 'ew', w); }
+    // Yaesu / Nihonbashi: offsets from Sotobori-dori × E-W streets
+    const zsE = EW_E.map(q => q[0]).filter(z => z > -700 && z < 700);
+    for (const [o, w] of NS_E) for (let j = 0; j < zsE.length - 1; j++)
+      link(node(SOTO(zsE[j]) + o, zsE[j]), node(SOTO(zsE[j + 1]) + o, zsE[j + 1]), 'ns', w);
+    for (const [z, w] of EW_E) { if (z <= -700 || z >= 700) continue;
+      for (let i = 0; i < NS_E.length - 1; i++) link(node(SOTO(z) + NS_E[i][0], z), node(SOTO(z) + NS_E[i + 1][0], z), 'ew', w); }
+    const live = edges.filter(e => e.a.e.length + e.b.e.length > 2);
+    edges.forEach((e, i) => { e.id = i; });
+
+    const KINDS = {
+      car:  { L: 4.6, W: 1.75, H: 1.45, cab: 0.55, cabShift: -0.05, cols: [0xf2f2f0, 0xc9ccd0, 0x1d1f24, 0x2a3550, 0x8a1d22, 0x6c7378, 0xe8e2d0] },
+      taxi: { L: 4.7, W: 1.7, H: 1.55, cab: 0.58, cabShift: -0.02, cols: [0x1c2846, 0x1c2846, 0x1c2846, 0xf2c01e, 0x2f7a46, 0xe07a1e] },
+      van:  { L: 5.4, W: 1.9, H: 2.1, cab: 0.82, cabShift: 0.05, cols: [0xf4f4f2, 0xe9e9e6, 0xb9bec2] },
+      bus:  { L: 10.8, W: 2.5, H: 3.0, cab: 0.96, cabShift: 0, cols: [0xe8e3d4, 0x7fb04a] },
+    };
+    const pickKind = () => { const r = Math.random(); return r < 0.52 ? 'car' : r < 0.82 ? 'taxi' : r < 0.95 ? 'van' : 'bus'; };
+    const cars = [];
+    const mk = (kind, o) => { const K = KINDS[kind];
+      return Object.assign({ kind, K, col: K.cols[(Math.random() * K.cols.length) | 0], vmax: (kind === 'bus' ? 9 : 11) + Math.random() * 4, v: 0,
+        ox: 0, oz: 0, yaw: 0, init: false }, o); };
+    // street cars, spread over the live edges
+    for (let i = 0; i < 420 && live.length; i++) {
+      const e = live[(Math.random() * live.length) | 0];
+      cars.push(mk(pickKind(), { mode: 'grid', e, fwd: Math.random() < 0.5, s: Math.random() * e.len }));
+    }
+    // roundabouts: taxis and buses, clockwise (keep left)
+    for (const R of ROTARIES) for (let i = 0; i < 6; i++)
+      cars.push(mk(i % 3 === 2 ? 'bus' : 'taxi', { mode: 'ring', R, ang: i / 6 * Math.PI * 2 + Math.random() * 0.3, rad: R.r * 0.78 }));
+    // expressways: polylines both ways at deck height
+    const ROUTES = [];
+    const poly = (pts, y, w) => { const segs = []; let L = 0;
+      for (let i = 0; i < pts.length - 1; i++) { const [ax, az] = pts[i], [bx, bz] = pts[i + 1], l = Math.hypot(bx - ax, bz - az); segs.push({ ax, az, dx: (bx - ax) / l, dz: (bz - az) / l, s0: L, l }); L += l; }
+      return { segs, L, y, w }; };
+    ROUTES.push(poly(RIVER, 13.65, 18), poly([[-400, 347], [480, 347]], 21.75, 20));
+    for (const r of ROUTES) for (let i = 0; i < Math.round(r.L / 26); i++)
+      cars.push(mk(Math.random() < 0.15 ? 'van' : Math.random() < 0.3 ? 'taxi' : 'car', { mode: 'road', r, fwd: i % 2 === 0, s: Math.random() * r.L, vmax: 18 + Math.random() * 5 }));
+
+    // instanced parts: lower body, glass cabin, roof, head- and tail-lights
+    const unit = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
+    const N = cars.length;
+    const im = (mat, n = N, cast = false) => { const m = new THREE.InstancedMesh(unit, mat, n); m.castShadow = cast; m.receiveShadow = true; m.frustumCulled = false; m.userData.noFade = m.userData.noOcclude = true; cityNear.add(m); return m; };
+    const bodyM = im(new THREE.MeshStandardMaterial({ roughness: 0.35, metalness: 0.45 }), N, true);
+    const glassM = im(new THREE.MeshStandardMaterial({ color: 0x1a222b, roughness: 0.15, metalness: 0.6 }));
+    const roofM = im(new THREE.MeshStandardMaterial({ roughness: 0.4, metalness: 0.4 }));
+    const headMat = new THREE.MeshBasicMaterial({ color: 0xfff6e0 }), tailMat = new THREE.MeshBasicMaterial({ color: 0xff2a1a });
+    const headM = im(headMat, N * 2), tailM = im(tailMat, N * 2);
+    const c = new THREE.Color();
+    cars.forEach((v, i) => { c.setHex(v.col); bodyM.setColorAt(i, c); roofM.setColorAt(i, v.kind === 'taxi' && v.col === 0x1c2846 ? c : c); });
+    const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
+    const part = (mesh, i, v, lx, ly, lz, sx, sy, sz) => {
+      const cy = Math.cos(v.yaw), sy0 = Math.sin(v.yaw);
+      _p.set(v.px + lx * cy + lz * sy0, v.py + ly, v.pz - lx * sy0 + lz * cy);
+      _q.setFromAxisAngle(_up, v.yaw); _s.set(sx, sy, sz);
+      mesh.setMatrixAt(i, _m.compose(_p, _q, _s));
+    };
+    const green = (n, axis, t) => (Math.floor((t + n.ph) / 20) % 2 === 0) === (axis === 'ns');
+    let clock = 0, frame = 0;
+    function update(dt) {
+      clock += dt;
+      // followers: per edge+direction, sorted
+      const lanes = new Map();
+      for (const v of cars) if (v.mode === 'grid') { const k = v.e.id * 2 + (v.fwd ? 1 : 0); (lanes.get(k) || lanes.set(k, []).get(k)).push(v); }
+      for (const L of lanes.values()) { L.sort((a, b) => a.s - b.s); L.forEach((v, i) => { v.lead = L[i + 1] || null; }); }
+      for (const v of cars) {
+        let x, z, y = 0.3, dx, dz, lane = 2.4;
+        if (v.mode === 'grid') {
+          const e = v.e, end = v.fwd ? e.b : e.a;
+          // stop line: red for this axis, or the car ahead
+          let limit = e.len - (end.e.length > 2 ? 9 : 0.5);
+          if (end.e.length > 2 && green(end, e.axis, clock)) limit = e.len + 50;
+          if (v.s > e.len - 8 && limit < e.len) limit = e.len + 50;          // already in the junction
+          if (v.lead) limit = Math.min(limit, v.lead.s - v.lead.K.L / 2 - v.K.L / 2 - 2.5);
+          const want = Math.max(0, Math.min(v.vmax, (limit - v.s) * 0.9));
+          v.v += Math.max(-6 * dt, Math.min(2.2 * dt, want - v.v));
+          v.s += v.v * dt;
+          if (v.s >= e.len) {                                                  // pick the next street
+            const n = end, opts = n.e.filter(q => q !== e);
+            const ne = opts.length ? opts[(Math.random() * opts.length) | 0] : e;
+            v.s -= e.len; if (ne === e) v.s = 0;
+            v.fwd = ne.a === n; v.e = ne;
+          }
+          const E = v.e, sg = v.fwd ? 1 : -1, s = v.fwd ? v.s : E.len - v.s;
+          x = E.a.x + E.dx * s; z = E.a.z + E.dz * s; dx = E.dx * sg; dz = E.dz * sg;
+          lane = Math.max(2.2, E.w / 4);
+        } else if (v.mode === 'ring') {
+          v.ang -= (8 / v.rad) * dt;                                             // clockwise
+          x = v.R.x + Math.cos(v.ang) * v.rad; z = v.R.z + Math.sin(v.ang) * v.rad;
+          dx = Math.sin(v.ang); dz = -Math.cos(v.ang); lane = 0; y = 0.36;
+        } else {
+          const r = v.r; v.s = (v.s + v.vmax * dt) % r.L;
+          const s = v.fwd ? v.s : r.L - v.s; let g = r.segs[0];
+          for (const q of r.segs) if (s >= q.s0) g = q;
+          const u = s - g.s0, sg = v.fwd ? 1 : -1;
+          x = g.ax + g.dx * u; z = g.az + g.dz * u; dx = g.dx * sg; dz = g.dz * sg; y = r.y; lane = r.w / 4;
+        }
+        // keep left: offset the lane to the left of travel; smooth the
+        // offset and heading through turns
+        const yaw = Math.atan2(dx, dz), ox = dz * lane, oz = -dx * lane;
+        if (!v.init) { v.yaw = yaw; v.ox = ox; v.oz = oz; v.init = true; }
+        const k = 1 - Math.exp(-dt / 0.25);
+        let dy = yaw - v.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+        v.yaw += dy * k; v.ox += (ox - v.ox) * k; v.oz += (oz - v.oz) * k;
+        v.px = x + v.ox; v.pz = z + v.oz; v.py = y;
+      }
+      const lit = 0.25 + 0.75 * Math.min(1, lightK() * 1.6), ls = 1 + 0.8 * Math.min(1, lightK() * 1.6);
+      headMat.color.setRGB(lit, lit * 0.97, lit * 0.88); tailMat.color.setRGB(0.35 + 0.65 * lit, 0.05, 0.03);
+      const lk = Math.min(1, lightK() * 1.4); lampHeadMat.color.setRGB(0.6 + 0.4 * lk, 0.6 + 0.32 * lk, 0.56 + 0.12 * lk);
+      frame++;
+      const camX = camera.position.x, camZ = camera.position.z;
+      cars.forEach((v, i) => {
+        // far away: refresh the instance matrices only every 4th frame (staggered)
+        if ((v.px - camX) ** 2 + (v.pz - camZ) ** 2 > 350 * 350 && (i + frame) % 4) return;
+        const K = v.K, hb = K.H * (v.kind === 'bus' ? 0.45 : 0.5), hc = K.H - hb - 0.08;
+        part(bodyM, i, v, 0, 0, 0, K.W, hb, K.L);
+        part(glassM, i, v, 0, hb, K.L * K.cabShift, K.W * 0.92, hc, K.L * K.cab);
+        part(roofM, i, v, 0, hb + hc, K.L * K.cabShift, K.W * 0.94, 0.08, K.L * K.cab * 0.98);
+        for (const sx of [-1, 1]) {
+          part(headM, i * 2 + (sx > 0 ? 1 : 0), v, sx * K.W * 0.34, hb * 0.55, K.L / 2 + 0.01, 0.42 * ls, 0.2 * ls, 0.05);
+          part(tailM, i * 2 + (sx > 0 ? 1 : 0), v, sx * K.W * 0.36, hb * 0.62, -K.L / 2 - 0.01, 0.4 * ls, 0.18 * ls, 0.05);
+        }
+      });
+      for (const m of [bodyM, glassM, roofM, headM, tailM]) m.instanceMatrix.needsUpdate = true;
+    }
+    if (bodyM.instanceColor) bodyM.instanceColor.needsUpdate = true;
+    if (roofM.instanceColor) roofM.instanceColor.needsUpdate = true;
+    // road markings: dashed centre lines, zebra crossings at junctions
+    {
+      const dash = [], zebra = [], lampP = [];
+      for (const e of live) {
+        const yaw = Math.atan2(e.dx, e.dz);
+        const cutA = e.a.e.length > 2 ? 10 : 2, cutB = e.b.e.length > 2 ? 10 : 2;
+        for (let d = cutA; d < e.len - cutB; d += 6) {
+          const x = e.a.x + e.dx * d, z = e.a.z + e.dz * d;
+          dash.push(new THREE.PlaneGeometry(0.15, 3).rotateX(-Math.PI / 2).rotateY(yaw).translate(x, 0.03, z));
+        }
+        // street lamps every ~32m on both kerbs of the wider streets
+        if (e.w >= 12) for (let d = 14; d < e.len - 8; d += 32) for (const sd of [-1, 1]) {
+          const off = e.w / 2 + 0.6;
+          lampP.push([e.a.x + e.dx * d + e.dz * off * sd, e.a.z + e.dz * d - e.dx * off * sd, yaw]);
+        }
+      }
+      for (const n of nodes) {
+        if (n.e.length < 3) continue;
+        for (const e of n.e) {
+          const out = e.a === n ? 1 : -1, ex = e.dx * out, ez = e.dz * out, yaw = Math.atan2(ex, ez);
+          const W = e.w * 0.85, d0 = Math.max(...n.e.map(q => q.w)) / 2 + 2.2;
+          for (let k = -W / 2 + 0.4; k < W / 2; k += 0.9)
+            zebra.push(new THREE.PlaneGeometry(0.45, 3).rotateX(-Math.PI / 2).rotateY(yaw).translate(n.x + ex * d0 + ez * k, 0.035, n.z + ez * d0 - ex * k));
+        }
+      }
+      const paint = new THREE.MeshStandardMaterial({ color: 0xe8e8e2, roughness: 0.8 });
+      for (const list of [dash, zebra]) if (list.length) {
+        const m = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(list), paint);
+        m.receiveShadow = true; m.userData.noFade = m.userData.noOcclude = true; cityFar.add(m);
+      }
+      // lamps: a pole + a glowing head (brighter at night)
+      const poleG = new THREE.CylinderGeometry(0.09, 0.12, 8, 6).translate(0, 4, 0);
+      const headG = new THREE.BoxGeometry(0.35, 0.18, 1.3).translate(0, 8, -0.5);
+      const pm = new THREE.InstancedMesh(poleG, new THREE.MeshStandardMaterial({ color: 0x5a6066, roughness: 0.5, metalness: 0.6 }), lampP.length);
+      const hm = new THREE.InstancedMesh(headG, lampHeadMat, lampP.length);
+      const mm = new THREE.Matrix4();
+      lampP.forEach(([x, z, yaw], i) => { mm.makeRotationY(yaw + Math.PI / 2).setPosition(x, 0.15, z); pm.setMatrixAt(i, mm); hm.setMatrixAt(i, mm); });
+      for (const m of [pm, hm]) { m.userData.noFade = m.userData.noOcclude = true; cityFar.add(m); }
+      pm.castShadow = true;
+    }
+
+    /* ---- pedestrians: on the sidewalks of the same street graph, and
+       across the station plaza between the brick station's entrances,
+       the roundabout bus stops and the streets. Same figure as on the
+       platforms, one instanced mesh. */
+    {
+      const c2 = document.createElement('canvas'); c2.width = 64; c2.height = 128;
+      const g = c2.getContext('2d'); g.fillStyle = '#fff';
+      g.beginPath(); g.arc(32, 22, 11, 0, 7); g.fill();
+      g.beginPath(); g.moveTo(18, 44); g.lineTo(46, 44); g.quadraticCurveTo(52, 88, 45, 126); g.lineTo(19, 126); g.quadraticCurveTo(12, 88, 18, 44); g.fill();
+      const tex = new THREE.CanvasTexture(c2); tex.colorSpace = THREE.SRGBColorSpace;
+      const peds = [];
+      const COLS = [0x33455f, 0x7a3b3b, 0x3b5e44, 0x5a4a6e, 0x444851, 0x8a6a3a, 0x2f5f7a, 0x6b2f4f, 0x9a9a92, 0x28303a, 0xb8b2a6];
+      for (let i = 0; i < 360 && live.length; i++) {
+        const e = live[(Math.random() * live.length) | 0];
+        peds.push({ mode: 'walk', e, fwd: Math.random() < 0.5, s: Math.random() * e.len, side: Math.random() < 0.5 ? 1 : -1,
+          v: 1.1 + Math.random() * 0.5, col: COLS[(Math.random() * COLS.length) | 0], ph: Math.random() * 6, lat: 0.6 + Math.random() * 1.6 });
+      }
+      // plaza: entrances (north / centre / south) ↔ plaza corners, bus stops, street crossings
+      const P0 = PLAZA, ents = [[-77, -86], [-77, -6], [-77, 6], [-77, 86], [-77, -40], [-77, 40]];
+      const outs = [[P0.x0 + 2, P0.z0 + 4], [P0.x0 + 2, P0.z1 - 4], [P0.x0 + 2, -14], [P0.x0 + 2, 14], [-110, P0.z0 + 2], [-110, P0.z1 - 2],
+        ...ROTARIES.map(R => [R.x, R.z + R.r + 2])];
+      for (let i = 0; i < 90; i++) {
+        const a = ents[(Math.random() * ents.length) | 0], b = outs[(Math.random() * outs.length) | 0];
+        peds.push({ mode: 'plaza', a, b, k: Math.random(), v: 1.1 + Math.random() * 0.4, col: COLS[(Math.random() * COLS.length) | 0], ph: Math.random() * 6, dir: Math.random() < 0.5 ? 1 : -1, j: (Math.random() - 0.5) * 6 });
+      }
+      const pm = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.75, 1.62), new THREE.MeshBasicMaterial({ map: tex, alphaTest: 0.5, side: THREE.DoubleSide }), peds.length);
+      pm.frustumCulled = false; pm.userData.noFade = pm.userData.noOcclude = true;
+      const col = new THREE.Color();
+      peds.forEach((p, i) => pm.setColorAt(i, col.setHex(p.col)));
+      cityNear.add(pm);
+      const _o = new THREE.Object3D();
+      let pf = 0;
+      const pedUpdate = dt => {
+        const cx = camera.position.x, cz = camera.position.z; pf++;
+        peds.forEach((p, i) => {
+          let x, z, y = 0.16;
+          if (p.mode === 'walk') {
+            p.s += p.v * dt;
+            if (p.s >= p.e.len) {
+              const n = p.fwd ? p.e.b : p.e.a, opts = n.e.filter(q => q !== p.e), ne = opts.length ? opts[(Math.random() * opts.length) | 0] : p.e;
+              p.s -= p.e.len; if (ne === p.e) { p.s = 0; p.side = -p.side; }
+              p.fwd = ne.a === n; p.e = ne;
+            }
+            const E = p.e, s = p.fwd ? p.s : E.len - p.s, sg = p.fwd ? 1 : -1, off = (E.w / 2 + p.lat) * p.side;
+            x = E.a.x + E.dx * s + E.dz * sg * off; z = E.a.z + E.dz * s - E.dx * sg * off;
+          } else {
+            const L = Math.hypot(p.b[0] - p.a[0], p.b[1] - p.a[1]);
+            p.k += p.dir * p.v * dt / L;
+            if (p.k > 1 || p.k < 0) {                     // arrived: pick a new destination from where they stand
+              const at = p.k > 1 ? p.b : p.a, isEnt = ents.includes(at);
+              const nxt = isEnt ? outs[(Math.random() * outs.length) | 0] : ents[(Math.random() * ents.length) | 0];
+              p.a = at; p.b = nxt; p.k = 0; p.dir = 1; p.j = (Math.random() - 0.5) * 6;
+            }
+            const nx = -(p.b[1] - p.a[1]) / L, nz = (p.b[0] - p.a[0]) / L, w = Math.sin(Math.PI * p.k) * p.j;
+            x = p.a[0] + (p.b[0] - p.a[0]) * p.k + nx * w; z = p.a[1] + (p.b[1] - p.a[1]) * p.k + nz * w; y = 0.08;
+          }
+          p.ph += dt * 9;
+          if ((x - cx) ** 2 + (z - cz) ** 2 > 250 * 250 && (i + pf) % 4) return;
+          _o.position.set(x, y + 0.81 + Math.abs(Math.sin(p.ph)) * 0.05, z);
+          _o.rotation.set(0, Math.atan2(cx - x, cz - z), 0); _o.updateMatrix();
+          pm.setMatrixAt(i, _o.matrix);
+        });
+        pm.instanceMatrix.needsUpdate = true;
+      };
+      pedUpdate(0.01);
+      peds.update = pedUpdate;
+      cityNear.userData.peds = peds;
+    }
+    update(0.01);
+    const pedsRef = cityNear.userData.peds;
+    traffic = { update: dt => { update(dt); pedsRef.update(dt); }, cars, peds: pedsRef, edges: live, nodes };
   }
 }
 scene.add(cityNear);
@@ -6717,6 +6989,7 @@ function step(dt) {
   updateCameo(dt);
   updateFlashes(dt);
   crowd.update(dt);
+  if (traffic) traffic.update(dt);
   uiAcc += dt;
   if (uiAcc > 0.12) { uiAcc = 0; ui.refresh(); }
   skyGroup.position.copy(camera.position);
@@ -6761,7 +7034,7 @@ function animate(now = performance.now()) {
 }
 animate();
 if (/[?&]debug\b/.test(location.search)) window.__sim = {
-  renderer, scene, camera, controls, trains, THREE, placeCars, setTravel, cutU, lineBlocked, LINES, lineSpan, lineXAt, trunkOf, crowd, PLATFORMS, platX, platTaper, platformOf,
+  renderer, scene, camera, controls, trains, THREE, placeCars, setTravel, cutU, lineBlocked, LINES, lineSpan, lineXAt, trunkOf, crowd, get traffic() { return traffic; }, PLATFORMS, platX, platTaper, platformOf,
   get timeScale() { return timeScale; }, set timeScale(v) { timeScale = v; },
   simulate(sec) {        // run the dispatcher headless (tests)
     for (let k = 0; k < sec / 0.05; k++) { for (const t of trains) updateTrain(t, 0.05); sound.update(0.05); }
