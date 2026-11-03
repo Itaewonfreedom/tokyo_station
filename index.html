@@ -1260,6 +1260,9 @@ const deckStrip = () => funnelStrip(DECK + 0.05, deckConcreteMat);
 funnelStrip(DECK - 0.55, new THREE.MeshStandardMaterial({
   color: 0x6e6a64, roughness: 1, side: THREE.DoubleSide }));
 
+// streets that pass under the railway viaduct (Marunouchi ↔ Yaesu), as on
+// the map: z on the west wall, z on the east wall, street width
+const UNDERPASSES = [{ zw: -263, ze: -263, w: 22 }, { zw: 410, ze: 410, w: 12 }, { zw: 560, ze: 540, w: 12 }];   // Eitai-dori first
 /* ---------- viaduct: the yard rides a ~3-storey brick arch structure
    (like the real red-brick viaduct under Tokyo Station's tracks) ---------- */
 {
@@ -1282,17 +1285,21 @@ funnelStrip(DECK - 0.55, new THREE.MeshStandardMaterial({
   });
   archTex.repeat.set(1, 1);
   const wallMat = new THREE.MeshStandardMaterial({ map: archTex, roughness: 0.95, side: THREE.DoubleSide });
+  // where a street passes under the viaduct the wall opens (a lintel stays)
+  const opening = (side, z) => UNDERPASSES.some(u => Math.abs(z - (side === 'left' ? u.zw : u.ze)) < u.w / 2 + 1.5);
   for (const side of ['left', 'right']) {
     const pos = [], uv = [], idx = [];
-    let i = 0;
-    for (let z = -Z_END; z <= Z_END; z += 8, i++) {
-      const e = corridorEdges(z)[side];
-      pos.push(e, DECK + 0.3, z, e, 0, z);
-      uv.push(z / 14, 1, z / 14, 0);
-      if (i > 0) {
-        const a = (i - 1) * 2;
-        idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
-      }
+    const zs = [];
+    for (let z = -Z_END; z <= Z_END; z += 8) zs.push(z);
+    for (const u of UNDERPASSES) { const zc = side === 'left' ? u.zw : u.ze; zs.push(zc - u.w / 2 - 1.5, zc + u.w / 2 + 1.5); }
+    zs.sort((p, q) => p - q);
+    for (let k = 0; k < zs.length - 1; k++) {
+      const z0 = zs[k], z1 = zs[k + 1]; if (z1 - z0 < 0.01) continue;
+      const yb = opening(side, (z0 + z1) / 2) ? 5.4 : 0, e0 = corridorEdges(z0)[side], e1 = corridorEdges(z1)[side];
+      const a = pos.length / 3;
+      pos.push(e0, DECK + 0.3, z0, e0, yb, z0, e1, DECK + 0.3, z1, e1, yb, z1);
+      uv.push(z0 / 14, 1, z0 / 14, yb / (DECK + 0.3), z1 / 14, 1, z1 / 14, yb / (DECK + 0.3));
+      idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -2794,9 +2801,9 @@ const cityFar = new THREE.Group();
   };
   // Marunouchi (west)
   lm({ name: 'Shin-Marunouchi', kind: 'W', px0: 0, px1: 210, y0: 435, y1: 615, h: 198, style: 0, taper: true, heli: true });
-  lm({ name: 'Marunouchi Oazo', kind: 'W', px0: 110, px1: 215, y0: 155, y1: 345, h: 150, style: 0, heli: true });
+  lm({ name: 'Marunouchi Oazo', kind: 'W', px0: 110, px1: 215, y0: 226, y1: 345, h: 150, style: 0, heli: true });
   lm({ name: 'Marunouchi Center', kind: 'W', px0: -40, px1: 100, y0: 260, y1: 440, h: 110, style: 2 });
-  lm({ name: 'Nippon Life Marunouchi', kind: 'WE', gap: 20, w: 44, y0: 140, y1: 400, h: 175, style: 1, heli: true });
+  lm({ name: 'Nippon Life Marunouchi', kind: 'WE', gap: 20, w: 44, y0: 226, y1: 400, h: 175, style: 1, heli: true });
   lm({ name: 'Tokyo Station north annex', kind: 'WE', gap: 16, w: 34, y0: 400, y1: 530, h: 90, style: 2 });
   lm({ name: 'Otemachi north', kind: 'W', px0: -60, px1: 150, y0: -120, y1: 140, h: 120, style: 1 });
   lm({ name: 'KITTE', kind: 'W', px0: 0, px1: 190, y0: 1345, y1: 1610, h: 44, style: 2 });
@@ -2822,7 +2829,7 @@ const cityFar = new THREE.Group();
     hug.push(b);
     return b;
   };
-  hugB('Tekko Building', 150, 360, 48, 125, 2, { plant: true });
+  hugB('Tekko Building', 226, 360, 48, 125, 2, { plant: true });     // its north face on Eitai-dori
   hugB('Yaesu north station block', 360, 690, 42, 32, 0, { plant: true });
   const GTN = hugB('GranTokyo North podium', 690, 990, 64, 46, 1);
   hugB('GranTokyo South Tower', 1520, 1835, 52, 205, 0, { heli: true, sail: true });
@@ -2840,6 +2847,7 @@ const cityFar = new THREE.Group();
     [GR.x0, GR.x1, GR.z0, GR.z1], [SITE.x0, SITE.x1, SITE.z0, SITE.z1],
     [PLAZA.x0 - 4, -50, PLAZA.z0 - 4, PLAZA.z1 + 4],                   // plaza + brick station
     [PLAZA.x0 - 130, PLAZA.x0, -9, 9],                                 // the axis avenue
+    ...UNDERPASSES.map(u => [-140, 175, Math.min(u.zw, u.ze) - u.w / 2 - 1, Math.max(u.zw, u.ze) + u.w / 2 + 1]),   // under-viaduct streets
   ];
   const hits = (x0, x1, z0, z1, m = 5) => blocked.some(([a, b, c, d]) => x0 < b + m && x1 > a - m && z0 < d + m && z1 > c - m);
 
@@ -3183,6 +3191,16 @@ const cityFar = new THREE.Group();
       link(node(SOTO(zsE[j]) + o, zsE[j]), node(SOTO(zsE[j + 1]) + o, zsE[j + 1]), 'ns', w);
     for (const [z, w] of EW_E) { if (z <= -700 || z >= 700) continue;
       for (let i = 0; i < NS_E.length - 1; i++) link(node(SOTO(z) + NS_E[i][0], z), node(SOTO(z) + NS_E[i + 1][0], z), 'ew', w); }
+    // through the viaduct: allowed to cross the rail corridor
+    const underOK = [];
+    for (const u of UNDERPASSES) {
+      const a = node(NS_W[0][0], u.zw), b = node(SOTO(u.ze) + NS_E[0][0], u.ze);
+      const L = Math.hypot(b.x - a.x, b.z - a.z); let ok = true;
+      for (let d = 0; d <= L && ok; d += 3) { const x = a.x + (b.x - a.x) * d / L, z = a.z + (b.z - a.z) * d / L;
+        if (roadBlock.some(([x0, x1, z0, z1]) => x > x0 - 1 && x < x1 + 1 && z > z0 - 1 && z < z1 + 1)) ok = false; }
+      underOK.push(ok);
+      if (ok) { const e = { a, b, axis: 'ew', w: u.w, len: L, dx: (b.x - a.x) / L, dz: (b.z - a.z) / L }; edges.push(e); a.e.push(e); b.e.push(e); }
+    }
     const live = edges.filter(e => e.a.e.length + e.b.e.length > 2);
     edges.forEach((e, i) => { e.id = i; });
 
@@ -3413,7 +3431,7 @@ const cityFar = new THREE.Group();
     }
     update(0.01);
     const pedsRef = cityNear.userData.peds;
-    traffic = { update: dt => { update(dt); pedsRef.update(dt); }, cars, peds: pedsRef, edges: live, nodes };
+    traffic = { update: dt => { update(dt); pedsRef.update(dt); }, cars, peds: pedsRef, edges: live, nodes, underOK };
   }
 }
 scene.add(cityNear);
