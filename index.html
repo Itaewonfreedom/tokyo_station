@@ -1163,13 +1163,31 @@ function markOccluder(root) {
       m.needsUpdate = true;
       occluderMats.add(m);
     }
+    if (o.isMesh && !o.isInstancedMesh) occluderMeshes.push(o);
   });
+}
+const occluderMeshes = [];
+// is there an occluder on the straight line camera → p (short of p)?
+const _occRay = new THREE.Raycaster(), _occBox = new THREE.Box3(), _occDir = new THREE.Vector3(), _occHits = [];
+function lineBlocked(p) {
+  _occDir.copy(p).sub(camera.position); const L = _occDir.length(); if (L < 2) return false;
+  _occDir.divideScalar(L);
+  _occRay.set(camera.position, _occDir); _occRay.near = 0.5; _occRay.far = L - 2.5;
+  for (const m of occluderMeshes) {
+    if (!m.visible) continue;
+    if (!m.geometry.boundingBox) m.geometry.computeBoundingBox();
+    _occBox.copy(m.geometry.boundingBox).applyMatrix4(m.matrixWorld);
+    if (!_occRay.ray.intersectsBox(_occBox)) continue;
+    _occHits.length = 0; m.raycast(_occRay, _occHits);
+    if (_occHits.some(h => h.distance < L - 2.5)) { lineBlocked.last = m; return true; }
+  }
+  return false;
 }
 // after the camera moved: what is being watched → the two cut subjects.
 // The cone eases in/out (no popping) and is off for overviews, the cab
 // view (inside the train), and reflection captures.
 const _cA = new THREE.Vector3(), _cB = new THREE.Vector3();
-let cutTarget = 0;
+let cutTarget = 0, cutCheck = 0, cutSeen = 0;
 function updateCut(dt) {
   const t = followTrain;
   cutTarget = 0;
@@ -1183,7 +1201,11 @@ function updateCut(dt) {
     // looking elsewhere — or from far above — opens nothing)
     let near = 1e9;
     for (const c of t.cars) near = Math.min(near, c.position.distanceTo(_cA));
-    if (dA > 6 && dA < 260 && near < 30) {
+    // only when something really stands in the line of sight (checked a
+    // few times a second; a short memory keeps it from flickering)
+    cutCheck -= dt;
+    if (cutCheck <= 0) { cutCheck = 0.15; cutSeen = lineBlocked(_cA) || lineBlocked(_cB) ? 0.6 : Math.max(0, cutSeen - 0.15); }
+    if (dA > 6 && dA < 260 && near < 30 && cutSeen > 0) {
       // radius grows a little with distance so a far view still shows a car
       const rA = Math.max(6.5, dA * 0.07), dB = camera.position.distanceTo(_cB);
       cutU.uCutA.value.set(_cA.x, _cA.y, _cA.z, rA);
@@ -1712,6 +1734,25 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null,
   scene.add(mesh);
   return mesh;
 }
+/* ---------- stairwells: two per island, between the canopy pillars ----------
+   Passengers come up them to wait at the doors and go back down after
+   getting off, so nobody appears out of thin air (or from the far track).
+   Each: centre z, direction people descend (dz), length, depth. */
+const STAIR_LEN = 9, STAIR_HW = 1.0, STAIR_DEPTH = 2.1;
+const STAIRS = PLATFORMS.map(p => {
+  const obst = [];                                   // z of things standing on the centreline
+  if (!p.roofless) for (let k = 0; k < Math.floor(p.len / 14); k++) obst.push(p.off - p.len / 2 + 7 + k * 14);
+  else for (let z = -540; z < 90; z += 16) obst.push(z);   // the Chuo deck's piers
+  obst.push(p.off + 18, p.off - 56, p.off - 31);      // benches, vending machines
+  const ok = z => obst.every(o => Math.abs(o - z) > STAIR_LEN / 2 + 1.2) && Math.abs(z - p.off) < p.len / 2 - 52;
+  const out = [];
+  for (const [aim, dz] of [[p.off - p.len * 0.2, -1], [p.off + p.len * 0.2, 1]]) {
+    let best = null;
+    for (let d = 0; d <= 30 && best === null; d += 0.5) for (const z of [aim + d, aim - d]) if (best === null && ok(z)) best = z;
+    if (best !== null) out.push({ z: best, dz, entZ: best - dz * STAIR_LEN / 2, botZ: best + dz * STAIR_LEN / 2 });
+  }
+  return out;
+});
 {
   const platMat = platLightMat;
   const yellowMat = new THREE.MeshStandardMaterial({ color: 0xe8c63a, roughness: 0.9 });
@@ -1818,6 +1859,46 @@ function sweepProfile(cxFn, z0, z1, profile, mat, vScale = 0.25, scaleFn = null,
     }
   });
   pillars.count = pi;
+  // stairwells: a dark stepped opening with glass-and-steel balustrades
+  {
+    const stepTex = canvasTex(64, 256, (g, w, h) => {
+      for (let y = 0; y < h; y++) {
+        const k = y / h, st = Math.floor(y / 14) % 2;
+        const v = (st ? 120 : 100) * (1 - 0.82 * k);
+        g.fillStyle = `rgb(${v | 0},${v | 0},${(v + 6) | 0})`; g.fillRect(0, y, w, 1);
+      }
+      g.fillStyle = '#e8c63a'; g.fillRect(0, 0, w, 4);              // yellow nosing at the top step
+    });
+    stepTex.wrapS = stepTex.wrapT = THREE.ClampToEdgeWrapping; stepTex.repeat.set(1, 1);
+    const holeMat = new THREE.MeshStandardMaterial({ map: stepTex, roughness: 0.9 });
+    const railMat = new THREE.MeshStandardMaterial({ color: 0xa9c4cf, roughness: 0.08, metalness: 0.1, transparent: true, opacity: 0.32, depthWrite: false });   // glass panels
+    const capMat = new THREE.MeshStandardMaterial({ color: 0x5b646b, roughness: 0.5, metalness: 0.6 });
+    const holes = [], rails = [], caps = [];
+    PLATFORMS.forEach((P, i) => {
+      const Y = platY(P) + PLAT_Y;
+      for (const st of STAIRS[i]) {
+        const x = platX(P, st.z), yaw = Math.atan2(platX(P, st.z + 1) - platX(P, st.z - 1), 2);
+        const place = g => g.rotateY(yaw).translate(x, Y, st.z);
+        // the opening: steps darken toward the bottom end (texture v=0 at the entrance)
+        const h = new THREE.PlaneGeometry(STAIR_HW * 2, STAIR_LEN).rotateX(-Math.PI / 2);
+        if (st.dz < 0) h.rotateY(Math.PI);
+        holes.push(place(h.translate(0, 0.014, 0)));
+        for (const sx of [-1, 1]) {
+          rails.push(place(new THREE.BoxGeometry(0.05, 0.95, STAIR_LEN).translate(sx * (STAIR_HW + 0.03), 0.5, 0)));
+          caps.push(place(new THREE.BoxGeometry(0.09, 0.06, STAIR_LEN).translate(sx * (STAIR_HW + 0.03), 1.0, 0)));
+        }
+        rails.push(place(new THREE.BoxGeometry(STAIR_HW * 2 + 0.1, 0.95, 0.05).translate(0, 0.5, st.dz * STAIR_LEN / 2)));
+        for (const sx of [-1, 1]) caps.push(place(new THREE.BoxGeometry(0.07, 0.12, STAIR_LEN).translate(sx * (STAIR_HW + 0.03), 0.06, 0)));   // kick plates
+        for (let k = -2; k <= 2; k++) for (const sx of [-1, 1])                                                          // posts
+          caps.push(place(new THREE.BoxGeometry(0.06, 1.0, 0.06).translate(sx * (STAIR_HW + 0.03), 0.5, k * STAIR_LEN / 4.2)));
+        caps.push(place(new THREE.BoxGeometry(STAIR_HW * 2 + 0.15, 0.06, 0.09).translate(0, 1.0, st.dz * STAIR_LEN / 2)));
+      }
+    });
+    for (const [list, mat, cast] of [[holes, holeMat, false], [rails, railMat, false], [caps, capMat, true]]) {
+      const m = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(list), mat);
+      m.castShadow = cast; m.receiveShadow = true; scene.add(m); platBits.push(m);
+    }
+  }
   // the white box that sits on the Chuo island's roof mid-station
   {
     const p = PLATFORMS[0], g = new THREE.BoxGeometry(2 * HW - 0.6, 1.7, 22);
@@ -4324,12 +4405,16 @@ function doorWorld(t, i, out, off = 0.6) {
   return out;
 }
 
-/* ---------- passengers: step off, then board through the open doors ----------
-   One instanced pool of billboard figures. A dwelling train counts as
-   "boarded" only when everyone queued at its doors has walked in — the
-   reason the conductor has to wait is right there on the platform. */
+/* ---------- passengers on the platforms ----------
+   Everyone walks a path of waypoints on their own island (never across a
+   track): boarders come up a stairwell as the train approaches, wait at
+   either side of a door, step in once the doors are open and the people
+   getting off are out; those getting off step out and go back down the
+   nearest stairs. A few more just come and go between the stairs. A
+   dwelling train counts as "boarded" when its boarders are all in. Nobody
+   pops in or out: they surface from / sink into a stairwell. */
 const crowd = (() => {
-  const N = 140;
+  const N = 420;
   const c = document.createElement('canvas'); c.width = 64; c.height = 128;
   const g = c.getContext('2d'); g.fillStyle = '#fff';
   g.beginPath(); g.arc(32, 22, 11, 0, 7); g.fill();
@@ -4341,56 +4426,173 @@ const crowd = (() => {
     new THREE.MeshBasicMaterial({ map: tex, alphaTest: 0.5, side: THREE.DoubleSide }), N);
   im.frustumCulled = false; im.count = 0;
   scene.add(im);
-  const COLS = [0x33455f, 0x7a3b3b, 0x3b5e44, 0x5a4a6e, 0x444851, 0x8a6a3a, 0x2f5f7a, 0x6b2f4f];
+  const COLS = [0x33455f, 0x7a3b3b, 0x3b5e44, 0x5a4a6e, 0x444851, 0x8a6a3a, 0x2f5f7a, 0x6b2f4f, 0x9a9a92, 0x28303a];
   const col = new THREE.Color();
-  const people = [];   // { t, door, x, z, tx, tz, speed, delay, board, ph, col }
+  const people = [];   // { pl, t, pts:[[x,y,z]], i, speed, delay, board, wait, ph, col, sink }
   const _o = new THREE.Object3D();
-  function spawnFor(t) {
-    const n = t.doorLocal.length;
-    const out = new THREE.Vector3(), dir = new THREE.Vector3();
-    for (let i = 0; i < n && people.length < N - 2; i++) {
+  const rc = () => COLS[(Math.random() * COLS.length) | 0];
+  // platform frame at z: centre x, usable half-width
+  const half = (pl, z) => 2.6 * platTaper(pl, z) - 0.35;
+  const onPlat = (pl, x, z) => {               // clamp a point onto the walkable deck
+    const zz = Math.min(pl.z1 - 2, Math.max(pl.z0 + 2, z)), cx = platX(pl, zz), h = Math.max(0.05, half(pl, zz));
+    return [cx + Math.max(-h, Math.min(h, x - cx)), zz];
+  };
+  const surf = pl => platY(pl) + PLAT_Y;
+  // path from a deck point down the nearest stairs (around the balustrade if needed)
+  function toStairs(pl, x, z) {
+    const st = STAIRS[PLATFORMS.indexOf(pl)]; if (!st || !st.length) return null;
+    let s0 = st[0]; for (const q of st) if (Math.abs(q.entZ - z) < Math.abs(s0.entZ - z)) s0 = q;
+    const y = surf(pl), cx = platX(pl, s0.entZ), pts = [];
+    if ((z - s0.entZ) * s0.dz > -0.5) {          // on the far side of the opening: walk round it
+      const side = x - platX(pl, z) >= 0 ? 1 : -1, lane = Math.min(STAIR_HW + 0.45, half(pl, s0.z));
+      pts.push([platX(pl, s0.botZ + s0.dz * 1.2) + side * lane, y, s0.botZ + s0.dz * 1.2]);
+      pts.push([platX(pl, s0.z) + side * lane, y, s0.z]);
+      pts.push([cx + side * lane, y, s0.entZ - s0.dz * 1.4]);
+    }
+    pts.push([cx, y, s0.entZ - s0.dz * 1.0], [cx, y, s0.entZ]);
+    pts.push([platX(pl, s0.botZ), y - STAIR_DEPTH, s0.botZ - s0.dz * 0.3]);
+    return pts;
+  }
+  // path up the nearest stairs to a deck point
+  function fromStairs(pl, x, z) {
+    const down = toStairs(pl, x, z); if (!down) return null;
+    return down.reverse();
+  }
+  function add(pl, t, pts, o) {
+    if (people.length >= N || !pts) return null;
+    const p = Object.assign({ pl, t, pts, i: 1, x: pts[0][0], y: pts[0][1], z: pts[0][2], speed: 1.05 + Math.random() * 0.45,
+      delay: 0, board: false, wait: false, ph: Math.random() * 6, col: rc() }, o);
+    if (pts.length < 2) p.i = 0;
+    people.push(p); return p;
+  }
+  // per-door spots: boarders queue to either side of the door, clear of
+  // the middle where people step off
+  // door i's point on the platform edge, where the train WILL stand (it may
+  // still be rolling in): route frame at the stop + the door's local offset
+  const _sp = { x: 0, z: 0, yaw: 0, y: 0 };
+  function doorAtStop(t, i, out, off) {
+    const [ci, lz] = t.doorLocal[i];
+    t.route.posAt(t.sStop - t.carOff[ci], _sp);
+    const lx = t.platSideLocal * (t.doorX + off), cy = Math.cos(_sp.yaw), sy = Math.sin(_sp.yaw);
+    return out.set(_sp.x + lx * cy + lz * sy, 0, _sp.z - lx * sy + lz * cy);
+  }
+  function doorSpots(t, i) {
+    const pl = platformOf(t.line), a = new THREE.Vector3(), b = new THREE.Vector3();
+    doorAtStop(t, i, a, 0.35); doorAtStop(t, i, b, 1.35);
+    const ix = b.x - a.x, iz = b.z - a.z, n = Math.hypot(ix, iz) || 1;
+    const inx = ix / n, inz = iz / n, ax = -inz, az = inx;
+    if (a.z < pl.z0 + 2 || a.z > pl.z1 - 2) return null;              // the door is past the platform end
+    const room = 2 * half(pl, a.z) + 0.35;                           // deck width at this door
+    if (room < 1.4) return null;
+    const d = Math.min(0.9, room - 0.6), w = t.doorW / 2 + 0.35;
+    return { pl, door: [a.x, a.z], inx, inz,
+      queue: [[-1, 0], [1, 0], [-1, 0.75], [1, 0.75]].map(([sd, back]) => onPlat(pl, a.x + inx * (d + back) + ax * sd * w, a.z + inz * (d + back) + az * sd * w)),
+      out: room };
+  }
+  // as a train approaches: boarders come up and queue
+  function prepare(t) {
+    if (t._crowdPrepared) return; t._crowdPrepared = true;
+    t.boarding = t.boardTotal = 0;
+    const y = surf(platformOf(t.line));
+    for (let i = 0; i < t.doorLocal.length; i++) {
       if (Math.random() < 0.35) continue;
-      doorWorld(t, i, out, 0.4);
-      doorWorld(t, i, dir, 3.4); dir.sub(out).normalize();       // outward, across the platform
-      const along = new THREE.Vector3(-dir.z, 0, dir.x);
-      const boarders = 1 + (Math.random() < 0.5 ? 1 : 0);
-      for (let b = 0; b < boarders; b++) {
-        const d = 1.8 + Math.random() * 1.6, a = (Math.random() - 0.5) * 2.4;
-        people.push({ t, board: true, x: out.x + dir.x * d + along.x * a, z: out.z + dir.z * d + along.z * a,
-          tx: out.x, tz: out.z, speed: 1.1 + Math.random() * 0.4, delay: 1.6 + Math.random() * 1.2 + b * 0.7,
-          ph: Math.random() * 6, col: COLS[(Math.random() * COLS.length) | 0] });
-      }
-      if (Math.random() < 0.5) {   // someone steps off first
-        const a = (Math.random() - 0.5) * 3;
-        people.push({ t, board: false, x: out.x, z: out.z, tx: out.x + dir.x * 3.2 + along.x * a, tz: out.z + dir.z * 3.2 + along.z * a,
-          speed: 1.2 + Math.random() * 0.3, delay: 0.9 + Math.random() * 0.5, ph: Math.random() * 6,
-          col: COLS[(Math.random() * COLS.length) | 0], life: 5 });
+      const sp = doorSpots(t, i); if (!sp) continue;
+      const n = 1 + (Math.random() < 0.45 ? 1 : 0) + (Math.random() < 0.15 ? 1 : 0);
+      for (let k = 0; k < n; k++) {
+        const [qx, qz] = sp.queue[k];
+        const up = fromStairs(sp.pl, qx, qz); if (!up) continue;
+        const pts = up.concat([[qx, y, qz]]);
+        const p = add(sp.pl, t, pts, { board: true, delay: Math.random() * 7 + k * 1.5, door: i, boardDelay: 1.8 + k * 0.7 + Math.random() * 0.5, speed: 1.2 + Math.random() * 0.4 });
+        if (p) { t.boarding++; t.boardTotal++; }
       }
     }
-    t.boarding = t.boardTotal = people.filter(p => p.t === t && p.board).length;
   }
+  // doors open: people step off, then the boarders go in
+  function spawnFor(t, instant = false) {
+    if (!t._crowdPrepared) {
+      prepare(t);
+      if (instant) for (const p of people) if (p.t === t && p.board) {         // scene start: already queued
+        const q = p.pts[p.pts.length - 1]; p.x = q[0]; p.y = q[1]; p.z = q[2]; p.i = p.pts.length; p.delay = 0;
+      }
+    }
+    const y = surf(platformOf(t.line));
+    for (let i = 0; i < t.doorLocal.length; i++) {
+      if (Math.random() < 0.5) continue;
+      const sp = doorSpots(t, i); if (!sp) continue;
+      const k = Math.min(1.6, sp.out - 0.8), a = (Math.random() - 0.5) * 0.8;
+      const [ox, oz] = onPlat(sp.pl, sp.door[0] + sp.inx * k - sp.inz * a, sp.door[1] + sp.inz * k + sp.inx * a);
+      const down = toStairs(sp.pl, ox, oz); if (!down) continue;
+      add(sp.pl, t, [[sp.door[0] - sp.inx * 0.5, y, sp.door[1] - sp.inz * 0.5], [ox, y, oz]].concat(down),
+        { delay: 0.5 + Math.random() * 0.7, sink: true });
+    }
+    for (const p of people) if (p.t === t && p.board) p.wait = true;    // board once the step-off is done
+  }
+  // the train is going / gone: anyone still waiting goes back downstairs
   function clearFor(t) {
-    for (let i = people.length - 1; i >= 0; i--) if (people[i].t === t) people.splice(i, 1);
-    t.boarding = 0;
+    for (const p of people) {
+      if (p.t !== t) continue;
+      if (p.board) {
+        const down = toStairs(p.pl, p.x, p.z);
+        p.board = false; p.wait = false; p.sink = true; p.delay = 0.4 + Math.random();
+        p.pts = [[p.x, p.y, p.z]].concat(down || []); p.i = p.pts.length > 1 ? 1 : 0;
+      }
+      p.t = null;
+    }
+    t.boarding = 0; t._crowdPrepared = false;
+  }
+  // a few people just passing through each platform near the camera
+  let wanderT = 0;
+  function wander(dt) {
+    wanderT -= dt; if (wanderT > 0) return;
+    wanderT = 0.6 + Math.random() * 0.8;
+    if (people.filter(p => p.amb).length > 70) return;
+    const pi = (Math.random() * PLATFORMS.length) | 0, pl = PLATFORMS[pi];
+    if (!STAIRS[pi].length) return;
+    const zz = pl.off + (Math.random() - 0.5) * (pl.len - 70);
+    if (camera.position.distanceTo(new THREE.Vector3(platX(pl, zz), surf(pl), zz)) > 260) return;
+    const h = half(pl, zz) - 0.2, x = platX(pl, zz) + (Math.random() * 2 - 1) * h;
+    const up = fromStairs(pl, x, zz), down = toStairs(pl, x, zz + (Math.random() < 0.5 ? -1 : 1) * 30);
+    if (!up || !down) return;
+    const mid = onPlat(pl, x, zz);
+    add(pl, null, up.concat([[mid[0], surf(pl), mid[1]]], down), { amb: true, sink: true, pauseAt: up.length, linger: 1 + Math.random() * 6 });
   }
   function update(dt) {
+    wander(dt);
     for (let i = people.length - 1; i >= 0; i--) {
       const p = people[i];
       if (p.delay > 0) { p.delay -= dt; continue; }
-      if (p.board && p.t.doorK < 0.6) continue;          // wait for the doors
-      const dx = p.tx - p.x, dz = p.tz - p.z, d = Math.hypot(dx, dz);
-      const step = p.speed * dt;
+      if (p.i >= p.pts.length) {
+        // reached the end of the path
+        if (p.board) {
+          if (p.inside) { if (p.t) p.t.boarding--; people.splice(i, 1); continue; }   // in the car
+          if (p.t && p.wait && p.t.doorK > 0.6) {
+            p.boardDelay -= dt;
+            if (p.boardDelay <= 0) {                                 // step in through the door
+              const sp = doorSpots(p.t, p.door);
+              if (sp) { p.pts = [[p.x, p.y, p.z], [sp.door[0], p.y, sp.door[1]], [sp.door[0] - sp.inx * 0.6, p.y, sp.door[1] - sp.inz * 0.6]]; p.i = 1; p.inside = true; }
+              else p.inside = true;
+            }
+          }
+          continue;
+        }
+        people.splice(i, 1);                                        // at the stair foot: gone below the deck
+        continue;
+      }
+      const [tx, ty, tz] = p.pts[p.i];
+      const dx = tx - p.x, dz = tz - p.z, d = Math.hypot(dx, dz), step = p.speed * dt;
       if (d <= step) {
-        p.x = p.tx; p.z = p.tz;
-        if (p.board) { p.t.boarding--; people.splice(i, 1); continue; }
-        p.life -= dt; if (p.life <= 0) { people.splice(i, 1); continue; }
-      } else { p.x += dx / d * step; p.z += dz / d * step; p.ph += dt * 9; }
+        p.x = tx; p.y = ty; p.z = tz; p.i++;
+        if (p.pauseAt === p.i - 1) p.delay = p.linger;             // wanderers stop a moment at their spot
+      } else {
+        const k = step / d;
+        p.x += dx * k; p.z += dz * k; p.y += (ty - p.y) * k; p.ph += dt * 9;
+      }
     }
     im.count = people.length;
     const cx = camera.position.x, cz = camera.position.z;
     people.forEach((p, i) => {
-      const moving = p.delay <= 0 && Math.hypot(p.tx - p.x, p.tz - p.z) > 0.05;
-      _o.position.set(p.x, p.t.cars[0].position.y + PLAT_Y + 0.82 + (moving ? Math.abs(Math.sin(p.ph)) * 0.06 : 0), p.z);
+      const moving = p.delay <= 0 && p.i < p.pts.length;
+      _o.position.set(p.x, p.y + 0.82 + (moving ? Math.abs(Math.sin(p.ph)) * 0.06 : 0), p.z);
       _o.rotation.set(0, Math.atan2(cx - p.x, cz - p.z), 0);
       _o.updateMatrix();
       im.setMatrixAt(i, _o.matrix);
@@ -4399,7 +4601,7 @@ const crowd = (() => {
     im.instanceMatrix.needsUpdate = true;
     if (im.instanceColor) im.instanceColor.needsUpdate = true;
   }
-  return { spawnFor, clearFor, update };
+  return { spawnFor, clearFor, prepare, update, get people() { return people; } };
 })();
 
 // the real line-up: Yamanote loop runs frequent headways on the same
@@ -4570,6 +4772,7 @@ function updateTrain(t, dt) {
     case 'enter': {
       const dist = t.sStop - t.sHead;
       if (!t.announced && dist < 260) { t.announced = true; voice.say('arrive', t); }
+      if (dist < 520) crowd.prepare(t);                  // boarders come up to the platform
       if (dist <= 0.08) {
         t.sHead = t.sStop; t.speed = 0;
         t.state = 'dwell'; t.timer = t.type.dwell; t.dwellT = 0; t.readyT = 0; t.cued = false;
@@ -4662,7 +4865,7 @@ function seedTrain(t, mode, before = 0) {
     t.braked = false; t.squealed = false; t.announced = false;
   }
   placeCars(t);
-  if (mode === 'dwell') crowd.spawnFor(t);
+  if (mode === 'dwell') crowd.spawnFor(t, true);
 }
 
 function updateSignals() {
@@ -6558,7 +6761,7 @@ function animate(now = performance.now()) {
 }
 animate();
 if (/[?&]debug\b/.test(location.search)) window.__sim = {
-  renderer, scene, camera, controls, trains, THREE, placeCars, setTravel, cutU, LINES, lineSpan, lineXAt, trunkOf,
+  renderer, scene, camera, controls, trains, THREE, placeCars, setTravel, cutU, lineBlocked, LINES, lineSpan, lineXAt, trunkOf, crowd, PLATFORMS, platX, platTaper, platformOf,
   get timeScale() { return timeScale; }, set timeScale(v) { timeScale = v; },
   simulate(sec) {        // run the dispatcher headless (tests)
     for (let k = 0; k < sec / 0.05; k++) { for (const t of trains) updateTrain(t, 0.05); sound.update(0.05); }
