@@ -2745,7 +2745,8 @@ const cityFar = new THREE.Group();
 {
   const rng = (() => { let s = 1234567; return () => (s = s * 16807 % 2147483647) / 2147483647; })();
 
-  function makeBuilding(x, z, w, d, h, taper, style = (rng() * 3) | 0, flatRoof = false) {
+  // podium: Marunouchi's 31 m ("100 shaku") street wall, with the tower set back above it
+  function makeBuilding(x, z, w, d, h, taper, style = (rng() * 3) | 0, flatRoof = false, podium = 0) {
     const g = new THREE.Group();
     const mat = cityWindowMaterial(style, {
       roughness: style === 0 ? 0.35 : 0.7,
@@ -2760,7 +2761,13 @@ const cityFar = new THREE.Group();
     // (one draw call, still fades on its own). Roofs and plant boxes sample
     // a plain corner texel of the facade so rooftops no longer show windows.
     const parts = [];
-    if (taper && h > 60) {
+    if (podium && h > podium + 15 && w > 22 && d > 22) {
+      parts.push(plainTop(new THREE.BoxGeometry(w, podium, d)).translate(0, podium / 2, 0));
+      parts.push(plainTop(new THREE.BoxGeometry(w + 0.6, 1.2, d + 0.6)).translate(0, podium + 0.6, 0));      // cornice at the 31 m line
+      const tw = w - 10, td = d - 10;
+      parts.push(plainTop(new THREE.BoxGeometry(tw, h - podium, td)).translate(0, podium + (h - podium) / 2, 0));
+      if (!flatRoof) parts.push(plainAll(new THREE.BoxGeometry(tw * 0.4, 4, td * 0.4)).translate(0, h + 2, 0));
+    } else if (taper && h > 60) {
       const ph = 10 + rng() * 8;
       parts.push(plainTop(new THREE.BoxGeometry(w, ph, d)).translate(0, ph / 2, 0));
       const tw = w * 0.72, td = d * 0.72;
@@ -2854,9 +2861,10 @@ const cityFar = new THREE.Group();
   const heliPads = [];
   for (const b of LM) {
     const w = b.x1 - b.x0, d = b.z1 - b.z0;
-    const g = makeBuilding((b.x0 + b.x1) / 2, (b.z0 + b.z1) / 2, w, d, b.h, !!b.taper, b.style, !!b.heli);
+    const pod = b.kind !== 'EE' && b.h > 60 ? 31 : 0;
+    const g = makeBuilding((b.x0 + b.x1) / 2, (b.z0 + b.z1) / 2, w, d, b.h, !!b.taper, b.style, !!b.heli, pod);
     cityNear.add(g);
-    if (b.heli) heliPads.push([(b.x0 + b.x1) / 2, b.h + 0.02, (b.z0 + b.z1) / 2, Math.min(w, d) * (b.taper ? 0.5 : 0.62)]);
+    if (b.heli) heliPads.push([(b.x0 + b.x1) / 2, b.h + 0.02, (b.z0 + b.z1) / 2, pod ? Math.min(w - 10, d - 10) * 0.6 : Math.min(w, d) * (b.taper ? 0.5 : 0.62)]);
   }
 
   /* ---- everything else follows the street grid of the map ----
@@ -2925,7 +2933,7 @@ const cityFar = new THREE.Group();
       if (!lotOK(xa, xb, za, zb)) continue;
       const near = Math.abs((za + zb) / 2) < 420;
       const h = Math.min(190, (near ? 95 : 45) + rng() * (near ? 95 : 70));
-      const b = makeBuilding((xa + xb) / 2, (za + zb) / 2, xb - xa, zb - za, h, h > 80 && rng() < 0.6);
+      const b = makeBuilding((xa + xb) / 2, (za + zb) / 2, xb - xa, zb - za, h, h > 80 && rng() < 0.6, undefined, false, 31);
       (xa > -150 ? cityNear : cityFar).add(b);
     }
   }
@@ -2973,7 +2981,7 @@ const cityFar = new THREE.Group();
         if (side < 0 ? x - w / 2 < limit : x + w / 2 > limit) break;
         const h = Math.min(160, 40 + rng() * 80);
         if (!lotOK(x - w / 2, x + w / 2, zC - d / 2 + 2, zC + d / 2 - 2)) continue;
-        cityNear.add(makeBuilding(x, zC, w, d - 4, h, rng() < 0.45));
+        cityNear.add(makeBuilding(x, zC, w, d - 4, h, rng() < 0.45, undefined, false, side < 0 ? 31 : 0));
       }
       z += d + gap;
     }
@@ -3058,7 +3066,9 @@ const cityFar = new THREE.Group();
   function hugMesh(b, style) {
     const n = Math.max(2, Math.ceil((b.z1 - b.z0) / 3)), west = [];
     for (let i = 0; i <= n; i++) { const z = b.z0 + (b.z1 - b.z0) * i / n; west.push([hugX(z), z]); }
-    const east = b.follow ? west.map(([x, z]) => [x + b.w, z]).reverse() : [[b.x1, b.z1], [b.x1, b.z0]];
+    const east = b.follow ? west.map(([x, z]) => [x + b.w, z]).reverse()
+      : b.sail ? [[b.x1, b.z1], [b.x1 + 12, (b.z0 + b.z1) / 2], [b.x1, b.z0]]      // GranTokyo's pointed glass 'sail'
+      : [[b.x1, b.z1], [b.x1, b.z0]];
     const all = west.concat(east), shape = new THREE.Shape();
     shape.moveTo(all[0][0], -all[0][1]);
     for (let i = 1; i < all.length; i++) shape.lineTo(all[i][0], -all[i][1]);
@@ -3092,8 +3102,16 @@ const cityFar = new THREE.Group();
   // GranTokyo North: the Daimaru podium runs along the tracks, the tower
   // stands on its far (east) side
   {
-    const w = 44, x1 = GTN.x1 - 1, x0 = x1 - w, z0 = GTN.z0 + 5, z1 = GTN.z1 - 5;
-    cityNear.add(makeBuilding((x0 + x1) / 2, (z0 + z1) / 2, w, z1 - z0, 205, false, 0, true));
+    const w = 40, x1 = GTN.x1 - 12, x0 = x1 - w, z0 = GTN.z0 + 5, z1 = GTN.z1 - 5;
+    const shape = new THREE.Shape(), pts = [[x0, z0], [x1, z0], [x1 + 12, (z0 + z1) / 2], [x1, z1], [x0, z1]];   // pointed glass 'sail'
+    shape.moveTo(pts[0][0], -pts[0][1]); for (const [px, pz] of pts.slice(1)) shape.lineTo(px, -pz);
+    const g = new THREE.ExtrudeGeometry(shape, { depth: 205, bevelEnabled: false, curveSegments: 1 }).rotateX(-Math.PI / 2);
+    const uv = g.attributes.uv, cap = g.groups[0];
+    for (let i = cap.start; i < cap.start + cap.count; i++) uv.setXY(i, 0.05, -0.06);
+    g.clearGroups();
+    const mat = cityWindowMaterial(0, { roughness: 0.3, metalness: 0.45 }); setFacadeRepeat(mat, 1 / 14, -1 / 15); cityMats.push(mat);
+    const tm = new THREE.Mesh(g, mat); tm.castShadow = tm.receiveShadow = true;
+    const tg = new THREE.Group(); tg.add(tm); cityNear.add(tg);
     heliPads.push([(x0 + x1) / 2, 205.02, (z0 + z1) / 2, Math.min(w, z1 - z0) * 0.62]);
   }
   // GranRoof: glass deck + white folded membrane, both following the curve
