@@ -109,6 +109,7 @@
   .mini { width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center; color: #fff;
     background: var(--glass); border: 1px solid var(--line); backdrop-filter: blur(6px); }
   .mini.off { color: #ff9a8a; }
+  .mini.on { background: #fff; color: #17233c; }
   #b-gear { width: 40px; height: 40px; opacity: .55; position: relative; }
   #b-gear.holding::after { content: ''; position: absolute; inset: -4px; border-radius: 50%; border: 3px solid #fff;
     clip-path: inset(0 0 0 0); animation: hold .7s linear forwards; }
@@ -185,6 +186,7 @@
 <div class="corner" id="tl">
   <button class="mini" id="b-sound" aria-label="sound"></button>
   <button class="mini" id="b-night" aria-label="day / night"></button>
+  <button class="mini" id="b-free" aria-label="free camera"></button>
 </div>
 <div class="corner" id="tr">
   <button class="mini" id="b-gear" aria-label="settings (hold)"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></svg></button>
@@ -6037,6 +6039,7 @@ const rig = {
   pos: new THREE.Vector3(), tgt: new THREE.Vector3(),
   oP: new THREE.Vector3(), oT: new THREE.Vector3(), A: new THREE.Vector3(),
   carry: new THREE.Vector3(), hasCarry: false,
+  free: false,          // free camera: not tied to any train, never returns on its own
 };
 let followTrain = null;        // the occlusion fader looks at this
 const _fa = { x: 0, y: 0, z: 0, fx: 0, fz: 1, slope: 0 }, _fb = { x: 0, y: 0, z: 0, fx: 0, fz: 1, slope: 0 }, _rp = { x: 0, z: 0, yaw: 0, y: 0, pitch: 0 };
@@ -6285,6 +6288,77 @@ function selectType(type, inst = null) {
   exitManual(true);
 }
 
+/* ---------- free camera ----------
+   Detached from the trains. Drag to look round, right-drag / two fingers
+   to pan along the ground, wheel / pinch to zoom; WASD or arrows move,
+   Q / E go down / up, Shift is faster. A tap on the ground glides there. */
+const freeCam = (() => {
+  const keys = new Set(), _f = new THREE.Vector3(), _r = new THREE.Vector3(), _mv = new THREE.Vector3();
+  let glide = null;
+  const MOVE = { KeyW: [0, 1], ArrowUp: [0, 1], KeyS: [0, -1], ArrowDown: [0, -1], KeyA: [-1, 0], ArrowLeft: [-1, 0], KeyD: [1, 0], ArrowRight: [1, 0] };
+  function enter() {
+    if (rig.free) return;
+    rig.free = true; rig.manual = false; rig.trans = null; rig.hasCarry = false;
+    controls.target.copy(rig.tgt);
+    controls.maxDistance = 1200; controls.minDistance = 1.5; controls.screenSpacePanning = false;
+    applyFov(55);
+    ui.refresh();
+  }
+  function leave() {
+    if (!rig.free) return;
+    rig.free = false; glide = null; keys.clear();
+    controls.maxDistance = 520; controls.minDistance = 4; controls.screenSpacePanning = true;
+  }
+  function glideTo(p) {
+    _mv.copy(p).sub(controls.target);
+    glide = { t0: controls.target.clone(), c0: camera.position.clone(), d: _mv.clone(), k: 0 };
+  }
+  function update(dt) {
+    // keyboard flight, relative to where the camera looks, speed grows with height
+    let fx = 0, fz = 0, up = 0;
+    for (const k of keys) { const m = MOVE[k]; if (m) { fx += m[0]; fz += m[1]; } }
+    if (keys.has('KeyE') || keys.has('PageUp')) up += 1;
+    if (keys.has('KeyQ') || keys.has('PageDown')) up -= 1;
+    if (fx || fz || up) {
+      glide = null;
+      const sp = Math.max(8, camera.position.distanceTo(controls.target) * 0.9) * ((keys.has('ShiftLeft') || keys.has('ShiftRight')) ? 3 : 1) * dt;
+      camera.getWorldDirection(_f); _f.y = 0; _f.normalize();
+      _r.set(-_f.z, 0, _f.x);
+      _mv.set(0, 0, 0).addScaledVector(_f, fz * sp).addScaledVector(_r, fx * sp); _mv.y = up * sp * 0.6;
+      camera.position.add(_mv); controls.target.add(_mv);
+    }
+    if (glide) {
+      glide.k = Math.min(1, glide.k + dt / 1.2);
+      const e = easeIO(glide.k);
+      controls.target.copy(glide.t0).addScaledVector(glide.d, e);
+      camera.position.copy(glide.c0).addScaledVector(glide.d, e);
+      if (glide.k >= 1) glide = null;
+    }
+    controls.update();
+    // never under the street
+    if (controls.target.y < 0) { camera.position.y -= controls.target.y; controls.target.y = 0; }
+    if (camera.position.y < 1.2) camera.position.y = 1.2;
+    rig.pos.copy(camera.position); rig.tgt.copy(controls.target);
+  }
+  // tap on the ground (not a train): glide the view there
+  function tap(x, y) {
+    _ndc.set((x / window.innerWidth) * 2 - 1, -(y / window.innerHeight) * 2 + 1);
+    raycaster.setFromCamera(_ndc, camera);
+    const hit = raycaster.intersectObjects(scene.children.filter(o => o !== skyGroup), true).find(h => h.object.visible && !h.object.isPoints && !h.object.isLine);
+    let p = hit && hit.distance < 900 ? hit.point : null;
+    if (!p) {                       // the street plane
+      const r = raycaster.ray; if (r.direction.y >= -0.01) return;
+      p = r.origin.clone().addScaledVector(r.direction, -r.origin.y / r.direction.y);
+      if (p.distanceTo(camera.position) > 900) return;
+    }
+    glideTo(p);
+  }
+  document.addEventListener('keydown', e => { if (rig.free && e.target.tagName !== 'INPUT') keys.add(e.code); });
+  document.addEventListener('keyup', e => keys.delete(e.code));
+  window.addEventListener('blur', () => keys.clear());
+  return { enter, leave, update, tap, stopGlide: () => { glide = null; }, keys, MOVE };
+})();
+
 const _P = new THREE.Vector3(), _T = new THREE.Vector3(), _A = new THREE.Vector3();
 const easeIO = k => (k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2);
 function startTransition(fromPos, fromTgt) {
@@ -6299,6 +6373,9 @@ function updateRig(dt, now) {
     else if (!next.group.visible) callTrain(rig.selType);
   }
   followTrain = rig.train && rig.train.group.visible ? rig.train : null;
+
+  // 1b. free camera: fly anywhere (keys / drag / pinch / tap-to-glide)
+  if (rig.free) { followTrain = null; freeCam.update(dt); return; }
 
   // 2. user has the camera: ride along with the train, stay out of the way
   if (rig.manual) {
@@ -6363,12 +6440,14 @@ function updateRig(dt, now) {
 }
 function enterManual() {
   rig.lastTouch = simNow;
+  if (rig.free) { freeCam.stopGlide(); return; }
   if (rig.manual) return;
   rig.manual = true; rig.trans = null; rig.hasCarry = false;
   controls.target.copy(rig.tgt);
   ui.refresh();
 }
 function exitManual(fly = true) {
+  if (rig.free) freeCam.leave();
   const was = rig.manual;
   rig.manual = false;
   if (was || fly) startTransition(camera.position, controls.target);
@@ -6476,6 +6555,7 @@ const ICON = {
   dusk: '<path d="M6.5 16a5.5 5.5 0 0111 0z" fill="currentColor"/><path d="M2 16h20M4 19.5h16M12 5v3M5.2 8.7l2 2M18.8 8.7l-2 2"/>',
   sun: '<circle cx="12" cy="12" r="4.2" fill="currentColor"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/>',
   gear: '<circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/>',
+  free: '<path d="M12 2.5v19M2.5 12h19"/><path d="M9 5.5l3-3 3 3M9 18.5l3 3 3-3M5.5 9l-3 3 3 3M18.5 9l3 3-3 3"/>',
   eye: '<path d="M1.5 12S5.5 5 12 5s10.5 7 10.5 7-4 7-10.5 7S1.5 12 1.5 12z"/><circle cx="12" cy="12" r="3.3" fill="currentColor"/>',
 };
 const svg = (name, cls = '') => `<svg class="ico ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[name]}</svg>`;
@@ -6522,6 +6602,8 @@ const ui = (() => {
   const bSnd = $('b-sound'), bNight = $('b-night'), bGear = $('b-gear'), bBack = $('b-back');
   bBack.innerHTML = svg('eye');
   bBack.addEventListener('click', () => { exitManual(true); sound.tick(); });
+  const bFree = $('b-free'); bFree.innerHTML = svg('free');
+  bFree.addEventListener('click', () => { if (rig.free) exitManual(true); else freeCam.enter(); sound.tick(); });
   bSnd.addEventListener('click', () => { setSound(!sound.on); });
   bNight.addEventListener('click', () => { tod = (tod + 1) % 3; savePref('tod', tod); sound.tick(); refresh(); });
   // settings: long-press so little hands don't open it by accident
@@ -6597,7 +6679,9 @@ const ui = (() => {
     for (const k in cards) cards[k].classList.toggle('sel', k === sel);
     shots.classList.toggle('show', !!rig.selType);
     for (const s in shotBtns) shotBtns[s].classList.toggle('on', rig.shot === s);
-    bBack.classList.toggle('show', rig.manual);
+    bBack.classList.toggle('show', rig.manual || rig.free);
+    bFree.classList.toggle('on', rig.free);
+    shots.classList.toggle('show', !!rig.selType && !rig.free);
     const si = sound.on ? 'snd' : 'mute', ni = ['dusk', 'moon', 'sun'][tod];   // what the next tap brings
     if (bSnd._i !== si) { bSnd._i = si; bSnd.innerHTML = svg(si); bSnd.classList.toggle('off', !sound.on); }
     if (bNight._i !== ni) { bNight._i = ni; bNight.innerHTML = svg(ni); }
@@ -6756,7 +6840,7 @@ document.addEventListener('click', e => {
   if (performance.now() < swallowUntil) { e.preventDefault(); e.stopPropagation(); swallowUntil = 0; }
 }, true);
 setInterval(() => {
-  if (!idle && started && !rig.manual && document.getElementById('sheet').hidden && performance.now() - lastInput > IDLE_S * 1000) {
+  if (!idle && started && !rig.manual && !rig.free && document.getElementById('sheet').hidden && performance.now() - lastInput > IDLE_S * 1000) {
     idle = true; document.body.classList.add('idle');
   }
 }, 500);
@@ -6768,19 +6852,22 @@ function onTap(x, y) {
   for (const bb of billboards)
     if (raycaster.intersectObject(bb, false).length) { waveCameo(bb); return; }
   const t = pickTrain(x, y);
+  if (rig.free) { if (t) honk(t); else freeCam.tap(x, y); return; }
   if (t) tapTrain(t);
 }
 
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
   if (!started) { if (e.code === 'Enter' || e.code === 'Space') startApp(); return; }
+  if (e.code === 'KeyF') { if (rig.free) exitManual(true); else freeCam.enter(); return; }
+  if (rig.free && (freeCam.MOVE[e.code] || /^(KeyQ|KeyE|PageUp|PageDown|Shift)/.test(e.code))) { e.preventDefault(); return; }
   const shotKeys = { Digit1: 'auto', Digit2: 'nose', Digit3: 'side', Digit4: 'plat', Digit5: 'cab' };
   if (shotKeys[e.code] && rig.selType) { rig.shot = shotKeys[e.code]; exitManual(true); ui.refresh(); }
   else if (e.code === 'Space') { e.preventDefault(); departPress(); }
   else if (e.code === 'KeyH') honk();
   else if (e.code === 'KeyM') setSound(!sound.on);
   else if (e.code === 'KeyN' || e.code === 'KeyT') document.getElementById('b-night').click();
-  else if (e.code === 'Escape') { if (!document.getElementById('sheet').hidden) document.getElementById('sheet').hidden = true; else if (rig.manual) exitManual(true); else selectType(null); }
+  else if (e.code === 'Escape') { if (!document.getElementById('sheet').hidden) document.getElementById('sheet').hidden = true; else if (rig.manual || rig.free) exitManual(true); else selectType(null); }
   else if (e.code === 'ArrowRight' || e.code === 'ArrowLeft') {
     const list = [null, ...TYPE_ORDER];
     const i = list.indexOf(rig.selType), n = list.length;
