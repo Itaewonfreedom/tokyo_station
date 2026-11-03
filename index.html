@@ -1987,10 +1987,13 @@ const PLAT_INFO = [
   const signBits = [];
   PLATFORMS.forEach((p, i) => {
     const info = PLAT_INFO[i];
-    const mat = new THREE.MeshBasicMaterial({ map: signTex(info), side: THREE.DoubleSide });
+    const mat = new THREE.MeshBasicMaterial({ map: signTex(info) });
+    // two single-sided faces back to back, so the text reads correctly from both ends
+    const boardGeo = BufferGeometryUtils.mergeGeometries([new THREE.PlaneGeometry(3.0, 0.8).translate(0, 0, 0.01),
+      new THREE.PlaneGeometry(3.0, 0.8).translate(0, 0, 0.01).rotateY(Math.PI)]);
     for (const dz of [-55, 55]) {
       const z = p.off + dz, x = platX(p, z), Y = platY(p);
-      const board = new THREE.Mesh(new THREE.PlaneGeometry(3.0, 0.8), mat);
+      const board = new THREE.Mesh(boardGeo, mat);
       board.position.set(x, Y + PLAT_Y + 2.6, z);  // face down the platform
       scene.add(board);
       const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.9, 0.1), postMat);
