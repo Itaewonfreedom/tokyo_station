@@ -3411,19 +3411,73 @@ const cityFar = new THREE.Group();
       cityNear.add(pm);
       const _o = new THREE.Object3D();
       let pf = 0;
+      // where a sidewalk walker is: edge, along-distance, side → world x/z and unit vectors
+      const pedPos = (E, fwd, s, side, lat) => {
+        const sg = fwd ? 1 : -1, ss = fwd ? s : E.len - s, off = (E.w / 2 + lat) * side;
+        return { x: E.a.x + E.dx * ss + E.dz * sg * off, z: E.a.z + E.dz * ss - E.dx * sg * off };
+      };
+      function pedJunction(p, n, hx) {
+        const E = p.e, sg = p.fwd ? 1 : -1, dox = E.dx * sg, doz = E.dz * sg;         // walking direction
+        const here = pedPos(E, p.fwd, E.len - hx, p.side, p.lat);
+        const ux = dox * 0 + doz * p.side, uz = -dox * p.side;                         // towards own kerb side (unit)
+        const opts = n.e.filter(q => q !== E);
+        const ne = opts[(Math.random() * opts.length) | 0];
+        const nf = ne.a === n, nsg = nf ? 1 : -1, dnx = ne.dx * nsg, dnz = ne.dz * nsg;
+        const q = [];
+        const straight = dnx * dox + dnz * doz > 0.7;
+        const towards = dnx * ux + dnz * uz > 0.3;
+        let side;
+        if (straight) {
+          side = (dnz * ux - dnx * uz) > 0 ? 1 : -1;                                    // keep the same kerb
+          const s0 = Math.min(ne.len * 0.4, hx);
+          const t = pedPos(ne, nf, s0, side, p.lat);
+          q.push({ x: t.x, z: t.z, axis: E.axis, n });
+          p.next = { e: ne, fwd: nf, s: s0, side };
+        } else {
+          // the new street's sidewalk on the corner facing back the way we came
+          side = (dnz * -dox - dnx * -doz) > 0 ? 1 : -1;
+          const s0 = Math.min(ne.len * 0.4, E.w / 2 + 1.2);
+          const t = pedPos(ne, nf, s0, side, p.lat);
+          if (!towards) {
+            // across the street we were walking along, on the near crosswalk
+            const c = { x: here.x - ux * 2 * (E.w / 2 + p.lat), z: here.z - uz * 2 * (E.w / 2 + p.lat) };
+            q.push({ x: c.x, z: c.z, axis: E.axis === 'ns' ? 'ew' : 'ns', n });
+          }
+          q.push({ x: t.x, z: t.z, axis: null, n });
+          p.next = { e: ne, fwd: nf, s: s0, side };
+        }
+        p.x = here.x; p.z = here.z; p.q = q; p.go = false;
+      }
       const pedUpdate = dt => {
         const cx = camera.position.x, cz = camera.position.z; pf++;
         peds.forEach((p, i) => {
           let x, z, y = 0.16;
-          if (p.mode === 'walk') {
+          if (p.mode === 'walk' && p.q) {
+            // corner / crosswalk waypoints: wait at the kerb for the walk phase
+            const w = p.q[0];
+            if (w.axis && !p.go) { if (green(w.n, w.axis, clock)) p.go = true; }
+            if (!w.axis || p.go) {
+              const ddx = w.x - p.x, ddz = w.z - p.z, d = Math.hypot(ddx, ddz), st = p.v * dt;
+              if (d <= st) { p.x = w.x; p.z = w.z; p.q.shift(); p.go = false; if (!p.q.length) { p.q = null; Object.assign(p, p.next); } }
+              else { p.x += ddx / d * st; p.z += ddz / d * st; }
+            } else p.ph -= dt * 9;                                  // standing still
+            x = p.x; z = p.z;
+          } else if (p.mode === 'walk') {
             p.s += p.v * dt;
-            if (p.s >= p.e.len) {
-              const n = p.fwd ? p.e.b : p.e.a, opts = n.e.filter(q => q !== p.e), ne = opts.length ? opts[(Math.random() * opts.length) | 0] : p.e;
-              p.s -= p.e.len; if (ne === p.e) { p.s = 0; p.side = -p.side; }
+            const E = p.e, n = p.fwd ? E.b : E.a;
+            if (n.e.length > 2) {
+              // a junction ahead: stop at the kerb, then cross / turn the corner on foot
+              let hx = 0; for (const q of n.e) if (q.axis !== E.axis) hx = Math.max(hx, q.w); hx = hx / 2 + 1.2;
+              if (p.s >= E.len - hx) pedJunction(p, n, hx);
+            } else if (p.s >= E.len) {
+              const opts = n.e.filter(q => q !== E), ne = opts.length ? opts[(Math.random() * opts.length) | 0] : E;
+              p.s -= E.len; if (ne === E) { p.s = 0; p.side = -p.side; }
               p.fwd = ne.a === n; p.e = ne;
             }
-            const E = p.e, s = p.fwd ? p.s : E.len - p.s, sg = p.fwd ? 1 : -1, off = (E.w / 2 + p.lat) * p.side;
-            x = E.a.x + E.dx * s + E.dz * sg * off; z = E.a.z + E.dz * s - E.dx * sg * off;
+            if (!p.q) {
+              const E2 = p.e, s = p.fwd ? p.s : E2.len - p.s, sg = p.fwd ? 1 : -1, off = (E2.w / 2 + p.lat) * p.side;
+              x = E2.a.x + E2.dx * s + E2.dz * sg * off; z = E2.a.z + E2.dz * s - E2.dx * sg * off;
+            } else { x = p.x; z = p.z; }
           } else {
             const L = Math.hypot(p.b[0] - p.a[0], p.b[1] - p.a[1]);
             p.k += p.dir * p.v * dt / L;
