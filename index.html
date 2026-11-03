@@ -2025,7 +2025,8 @@ const TPLAZAS = [
     canopy: [-102, 55, 7], parking: [-124, -113, 41, 69] },
 ];
 // the open-air car park north of the north plaza (striped bays in the photo)
-const CARPARK = { x0: -130, x1: -93, z0: -125, z1: -100 };
+const CARPARK = { x0: -130, x1: -93, z0: -117, z1: -99 };
+const TRACKSIDE = { north: null };     // set by the street graph
 // clockwise centreline of a plaza loop, sampled every ~2 m
 function loopPts(P) {
   const h = P.lane / 2, x0 = P.x0 + h, x1 = P.x1 - h, z0 = P.z0 + h, z1 = P.z1 - h, r = P.r - h, out = [];
@@ -3350,7 +3351,30 @@ const cityFar = new THREE.Group();
       for (let d = 0; d <= L && ok; d += 3) { const x = a.x + (b.x - a.x) * d / L, z = a.z + (b.z - a.z) * d / L;
         if (roadBlock.some(([x0, x1, z0, z1]) => x > x0 - 1 && x < x1 + 1 && z > z0 - 1 && z < z1 + 1)) ok = false; }
       underOK.push(ok);
-      if (ok) { const e = { a, b, axis: 'ew', w: u.w, len: L, dx: (b.x - a.x) / L, dz: (b.z - a.z) / L }; edges.push(e); a.e.push(e); b.e.push(e); }
+      const raw = (a, b, axis, w) => { const l = Math.hypot(b.x - a.x, b.z - a.z), e = { a, b, axis, w, len: l, dx: (b.x - a.x) / l, dz: (b.z - a.z) / l }; edges.push(e); a.e.push(e); b.e.push(e); };
+      if (!ok) continue;
+      if (u.zw === u.ze && u.zw < -200) {
+        // Eitai-dori: a junction just short of the viaduct, where the track-side street begins
+        const T = node(corridorEdges(u.zw).left - 6, u.zw);
+        raw(a, T, 'ew', u.w); raw(T, b, 'ew', u.w); TRACKSIDE.north = T;
+      } else raw(a, b, 'ew', u.w);
+    }
+    /* Track-side streets (satellite photo): a ginkgo-lined street runs along
+       the west side of the viaduct — north from Eitai-dori down to the
+       station's north exit (a drop-off: cars turn round there), and south
+       from the station's south end down to the street under the KK deck. */
+    const tsX = z => corridorEdges(z).left - 6;
+    if (TRACKSIDE.north) {
+      let prev = TRACKSIDE.north;
+      for (const z of [-240, -215, -190, -168, -150]) { const n = node(tsX(z), z); if (clearRoad(prev, n)) { link(prev, n, 'ns', 9); edges[edges.length - 1].ts = true; prev = n; } else break; }
+    }
+    {
+      let prev = null;
+      // south of the station it is a wider, four-lane street
+      const tsS = z => corridorEdges(z).left - 9;
+      for (const z of [136, 165, 200, 235, 270, 305, 330]) { const n = node(tsS(z), z); if (!prev || clearRoad(prev, n)) { if (prev) { link(prev, n, 'ns', 14); edges[edges.length - 1].ts = true; } prev = n; } else break; }
+      const j = key.get(NS_W[0][0].toFixed(1) + ',' + (347).toFixed(1));
+      if (prev && j) { const m = node(tsS(347), 347); if (clearRoad(prev, m)) { link(prev, m, 'ns', 14); edges[edges.length - 1].ts = true; } if (clearRoad(m, j)) link(m, j, 'ew', 14); }
     }
     const live = edges.filter(e => e.a.e.length + e.b.e.length > 2);
     edges.forEach((e, i) => { e.id = i; });
@@ -3476,13 +3500,14 @@ const cityFar = new THREE.Group();
           if (end.e.length > 2 && green(end, e.axis, clock)) limit = e.len + 50;
           if (v.s > e.len - 8 && limit < e.len) limit = e.len + 50;          // already in the junction
           if (v.lead) limit = Math.min(limit, v.lead.s - v.lead.K.L / 2 - v.K.L / 2 - 2.5);
-          const want = Math.max(0, Math.min(v.vmax, (limit - v.s) * 0.9));
+          let want = Math.max(0, Math.min(v.vmax, (limit - v.s) * 0.9));
+          if (v.uhold > 0) { v.uhold -= dt; want = 0; v.v = 0; }
           v.v += Math.max(-6 * dt, Math.min(2.2 * dt, want - v.v));
           v.s += v.v * dt;
           if (v.s >= e.len) {                                                  // pick the next street
             const n = end, opts = n.e.filter(q => q !== e), Z = PZ.find(q => q.mouth === n);
             if (Z && Z.n < 8) { visit(v, Z); v.s = 0; }                      // turn into the traffic plaza
-            else if (!opts.length) { v.s = 0; v.fwd = !v.fwd; v.v *= 0.3; }  // dead end: turn round
+            else if (!opts.length) { v.s = 0; v.fwd = !v.fwd; v.v = 0; v.uhold = 3 + Math.random() * 5; }  // dead end (drop-off): stop, turn round
             else {
               const ne = opts[(Math.random() * opts.length) | 0];
               v.s -= e.len; v.fwd = ne.a === n; v.e = ne;
@@ -3581,6 +3606,7 @@ const cityFar = new THREE.Group();
     if (roofM.instanceColor) roofM.instanceColor.needsUpdate = true;
     // road markings: dashed centre lines, zebra crossings at junctions
     {
+      const mm0 = new THREE.Matrix4();
       const dash = [], zebra = [], lampP = [];
       for (const e of live) {
         const yaw = Math.atan2(e.dx, e.dz);
@@ -3608,6 +3634,29 @@ const cityFar = new THREE.Group();
       for (const list of [dash, zebra]) if (list.length) {
         const m = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(list), paint);
         m.receiveShadow = true; m.userData.noFade = m.userData.noOcclude = true; cityFar.add(m);
+      }
+      // track-side streets: a footway on the town side with a row of ginkgo, a narrow one by the viaduct
+      {
+        const slabs = [], treeP = [];
+        for (const e of live) {
+          if (!e.ts) continue;
+          let nx = e.dz, nz = -e.dx; if (nx > 0) { nx = -nx; nz = -nz; }        // town side (west)
+          const yaw = Math.atan2(e.dx, e.dz), mx = (e.a.x + e.b.x) / 2, mz = (e.a.z + e.b.z) / 2;
+          const fw = e.w > 10 ? 5 : 3.5;
+          for (const [off, wd] of [[e.w / 2 + fw / 2, fw], [-(e.w / 2 + 1), 2]])
+            slabs.push(new THREE.BoxGeometry(wd, 0.16, e.len + 1).rotateY(yaw).translate(mx + nx * off, 0.08, mz + nz * off));
+          for (let d = 4; d < e.len - 2; d += 9) treeP.push([e.a.x + e.dx * d + nx * (e.w / 2 + 2.2), e.a.z + e.dz * d + nz * (e.w / 2 + 2.2)]);
+        }
+        if (slabs.length) {
+          const m = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(slabs), new THREE.MeshStandardMaterial({ color: 0xbdb8ae, roughness: 0.95 }));
+          m.receiveShadow = true; m.userData.noFade = m.userData.noOcclude = true; cityFar.add(m);
+          const trunkG = new THREE.CylinderGeometry(0.13, 0.2, 2.2, 6).translate(0, 1.1, 0), crownG = new THREE.ConeGeometry(1.9, 6.5, 8).translate(0, 5.2, 0);
+          const tr = new THREE.InstancedMesh(trunkG, new THREE.MeshStandardMaterial({ color: 0x5a4634, roughness: 1 }), treeP.length);
+          const cr = new THREE.InstancedMesh(crownG, new THREE.MeshStandardMaterial({ color: 0x5f8f3e, roughness: 0.95 }), treeP.length);
+          treeP.forEach(([x, z], i) => { const sc = 0.85 + Math.random() * 0.35; mm0.makeScale(sc, sc, sc).setPosition(x, 0.16, z); tr.setMatrixAt(i, mm0); cr.setMatrixAt(i, mm0); });
+          cr.castShadow = true;
+          for (const q of [tr, cr]) { q.userData.noFade = q.userData.noOcclude = true; cityFar.add(q); }
+        }
       }
       // lamps: a pole + a glowing head (brighter at night)
       const poleG = new THREE.CylinderGeometry(0.09, 0.12, 8, 6).translate(0, 4, 0);
@@ -7460,7 +7509,7 @@ function animate(now = performance.now()) {
 }
 animate();
 if (/[?&]debug\b/.test(location.search)) window.__sim = {
-  renderer, scene, camera, controls, trains, THREE, placeCars, setTravel, cutU, lineBlocked, LINES, lineSpan, lineXAt, trunkOf, crowd, get traffic() { return traffic; }, PLATFORMS, platX, platTaper, platformOf,
+  renderer, scene, camera, controls, trains, THREE, corridorEdges, placeCars, setTravel, cutU, lineBlocked, LINES, lineSpan, lineXAt, trunkOf, crowd, get traffic() { return traffic; }, PLATFORMS, platX, platTaper, platformOf,
   get timeScale() { return timeScale; }, set timeScale(v) { timeScale = v; },
   simulate(sec) {        // run the dispatcher headless (tests)
     for (let k = 0; k < sec / 0.05; k++) { for (const t of trains) updateTrain(t, 0.05); sound.update(0.05); }
