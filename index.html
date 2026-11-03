@@ -2011,7 +2011,43 @@ const PLAT_INFO = [
    palace (Gyoko-dori), two lawns either side of it, the north and south
    bus/taxi roundabouts and tree lines round the edge ---------- */
 const PLAZA = { x0: -141, x1: -76, z0: -118, z1: 110 };
-const ROTARIES = [{ x: -104, z: -58, r: 17 }, { x: -106, z: 40, r: 16 }];
+/* The north and south traffic plazas (駅前交通広場), as in the satellite
+   photo: a one-way loop round an island, joined to the street by a short
+   two-way stub. Clockwise seen from above (keep left: the bus doors and
+   the bus stops are on the outer, station-side kerb). Buses stop at the
+   bus stops, taxis at the taxi stand, cars drop off — then all leave. */
+const TPLAZAS = [
+  { x0: -131, x1: -90, z0: -89, z1: -35, lane: 6.5, r: 10, mouth: [-137, -96], conn: [-133.5, -90.5], E: [-120, -89], X: [-131, -79],
+    stops: { bus: [[-90, -71], [-90, -56]], taxi: [[-104, -35], [-112, -35], [-120, -35]], car: [[-102, -89]] },
+    canopy: [-110, -53, 7], shelter: [-122, -100, -80, -68] },
+  { x0: -131, x1: -88, z0: 32, z1: 78, lane: 6.5, r: 10, mouth: [-137, 68], conn: [-133.5, 66], E: [-131, 57], X: [-131, 65],
+    stops: { bus: [[-88, 47], [-88, 62]], taxi: [[-104, 32], [-112, 32], [-120, 32]], car: [[-102, 78]] },
+    canopy: [-102, 55, 7], parking: [-124, -113, 41, 69] },
+];
+// the open-air car park north of the north plaza (striped bays in the photo)
+const CARPARK = { x0: -130, x1: -93, z0: -125, z1: -100 };
+// clockwise centreline of a plaza loop, sampled every ~2 m
+function loopPts(P) {
+  const h = P.lane / 2, x0 = P.x0 + h, x1 = P.x1 - h, z0 = P.z0 + h, z1 = P.z1 - h, r = P.r - h, out = [];
+  const edge = (ax, az, bx, bz) => { const L = Math.hypot(bx - ax, bz - az), n = Math.max(1, Math.round(L / 2)); for (let i = 0; i < n; i++) out.push([ax + (bx - ax) * i / n, az + (bz - az) * i / n]); };
+  const arc = (cx, cz, a0) => { for (let i = 0; i < 6; i++) { const a = a0 + i / 6 * Math.PI / 2; out.push([cx + r * Math.cos(a), cz + r * Math.sin(a)]); } };
+  edge(x0 + r, z0, x1 - r, z0); arc(x1 - r, z0 + r, -Math.PI / 2);
+  edge(x1, z0 + r, x1, z1 - r); arc(x1 - r, z1 - r, 0);
+  edge(x1 - r, z1, x0 + r, z1); arc(x0 + r, z1 - r, Math.PI / 2);
+  edge(x0, z1 - r, x0, z0 + r); arc(x0 + r, z0 + r, Math.PI);
+  return out;
+}
+// does segment a→b (x,z pairs) pass through rect [x0,x1,z0,z1] (grown by m)?
+function segHitsRect(a, b, R, m = 0) {
+  let t0 = 0, t1 = 1; const dx = b[0] - a[0], dz = b[1] - a[1];
+  for (const [p, q] of [[-dx, a[0] - (R[0] - m)], [dx, (R[1] + m) - a[0]], [-dz, a[1] - (R[2] - m)], [dz, (R[3] + m) - a[1]]]) {
+    if (p === 0) { if (q < 0) return false; continue; }
+    const t = q / p; if (p < 0) { if (t > t1) return false; if (t > t0) t0 = t; } else { if (t < t0) return false; if (t < t1) t1 = t; }
+  }
+  return true;
+}
+const inRect = (x, z, R, m = 0) => x > R[0] - m && x < R[1] + m && z > R[2] - m && z < R[3] + m;
+const plazaRects = TPLAZAS.map(P => [P.x0, P.x1, P.z0, P.z1]);
 {
   const park = new THREE.Group();
   const lawnMat = new THREE.MeshStandardMaterial({ color: 0x6fae5a, roughness: 1 });
@@ -2025,19 +2061,82 @@ const ROTARIES = [{ x: -104, z: -58, r: 17 }, { x: -106, z: 40, r: 16 }];
   flat(x1 - x0, z1 - z0, paveMat, (x0 + x1) / 2, 0.02, (z0 + z1) / 2);
   flat(x1 - x0 + 120, 14, axisMat, (x0 + x1) / 2 - 60, 0.05, 0);           // the axis runs on west
   for (const s of [-1, 1]) flat(29, 12, lawnMat, -122, 0.06, s * 15);
-  for (const R of ROTARIES) {
-    const ring = new THREE.Mesh(new THREE.RingGeometry(R.r * 0.55, R.r, 40).rotateX(-Math.PI / 2), roadMat);
-    ring.position.set(R.x, 0.06, R.z); ring.receiveShadow = true; park.add(ring);
-    const isl = new THREE.Mesh(new THREE.CircleGeometry(R.r * 0.55, 32).rotateX(-Math.PI / 2), islandMat);
-    isl.position.set(R.x, 0.07, R.z); isl.receiveShadow = true; park.add(isl);
-    // the round bus-stop canopy in the middle of each roundabout
-    const can = new THREE.Mesh(new THREE.RingGeometry(R.r * 0.18, R.r * 0.5, 32).rotateX(-Math.PI / 2), canopyMat);
-    can.material.side = THREE.DoubleSide; can.position.set(R.x, 3.6, R.z); can.castShadow = true; park.add(can);
-    for (let i = 0; i < 8; i++) {
-      const a = i / 8 * Math.PI * 2, p = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 3.6, 6), canopyMat);
-      p.position.set(R.x + Math.cos(a) * R.r * 0.34, 1.8, R.z + Math.sin(a) * R.r * 0.34); park.add(p);
+  const paint = new THREE.MeshStandardMaterial({ color: 0xeeeee8, roughness: 0.8 });
+  const kerbMat = new THREE.MeshStandardMaterial({ color: 0xcfcbc2, roughness: 0.9 });
+  const rrShape = (x0, x1, z0, z1, r) => {            // rounded rect in shape space (x, -z)
+    const s = new THREE.Shape();
+    s.moveTo(x0 + r, -z0); s.lineTo(x1 - r, -z0); s.quadraticCurveTo(x1, -z0, x1, -z0 - r);
+    s.lineTo(x1, -z1 + r); s.quadraticCurveTo(x1, -z1, x1 - r, -z1); s.lineTo(x0 + r, -z1);
+    s.quadraticCurveTo(x0, -z1, x0, -z1 + r); s.lineTo(x0, -z0 - r); s.quadraticCurveTo(x0, -z0, x0 + r, -z0);
+    return s;
+  };
+  const flatShape = (shape, mat, y, depth = 0) => {
+    const g = depth ? new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false, curveSegments: 6 }) : new THREE.ShapeGeometry(shape, 6);
+    const m = new THREE.Mesh(g.rotateX(-Math.PI / 2).translate(0, y, 0), mat); m.receiveShadow = true; park.add(m); return m;
+  };
+  const stripe = (list, x, z, w, d, yaw = 0) => list.push(new THREE.PlaneGeometry(w, d).rotateX(-Math.PI / 2).rotateY(yaw).translate(x, 0.1, z));
+  const marks = [];
+  for (const P of TPLAZAS) {
+    // carriageway (rounded rect) and the raised island
+    flatShape(rrShape(P.x0, P.x1, P.z0, P.z1, P.r), roadMat, 0.07);
+    const L = P.lane;
+    flatShape(rrShape(P.x0 + L, P.x1 - L, P.z0 + L, P.z1 - L, Math.max(1, P.r - L)), islandMat, 0.07, 0.15);
+    // stub from the street to the loop
+    const [mx, mz] = P.mouth, [cx, cz] = P.conn;
+    const sl = Math.hypot(cx - mx, cz - mz), sy = Math.atan2(cx - mx, cz - mz);
+    const stub = new THREE.Mesh(new THREE.PlaneGeometry(10, sl + 12).rotateX(-Math.PI / 2).rotateY(sy), roadMat);
+    stub.position.set((mx + cx) / 2, 0.08, (mz + cz) / 2); stub.receiveShadow = true; park.add(stub);
+    // bus-stop and taxi-stand kerb markings, a dashed lane edge
+    for (const [bx, bz] of P.stops.bus) { stripe(marks, bx + (bx > P.x1 - 1 ? -1.2 : 1.2), bz, 0.25, 13); for (let k = -5; k <= 5; k += 2.5) stripe(marks, bx + (bx > P.x1 - 1 ? -2 : 2), bz + k, 1.4, 0.18); }
+    for (const [tx, tz] of P.stops.taxi) stripe(marks, tx, tz + (tz > P.z1 - 1 ? -1.2 : 1.2), 7, 0.22);
+    // shelters on the station-side kerb at each bus stop
+    for (const [bx, bz] of P.stops.bus) {
+      const roof = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.15, 9), canopyMat); roof.position.set(bx + 2.4, 2.8, bz); roof.castShadow = true; park.add(roof);
+      for (const k of [-3.8, 3.8]) { const pp = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 2.8, 6), canopyMat); pp.position.set(bx + 3.2, 1.4, bz + k); park.add(pp); }
+    }
+    // island: round canopy (bus waiting area), a low service building, island car park
+    if (P.canopy) {
+      const [qx, qz, qr] = P.canopy;
+      const can = new THREE.Mesh(new THREE.RingGeometry(qr * 0.35, qr, 32).rotateX(-Math.PI / 2), canopyMat);
+      can.material.side = THREE.DoubleSide; can.position.set(qx, 3.6, qz); can.castShadow = true; park.add(can);
+      for (let i = 0; i < 8; i++) { const a = i / 8 * Math.PI * 2, pp = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 3.6, 6), canopyMat);
+        pp.position.set(qx + Math.cos(a) * qr * 0.6, 1.8, qz + Math.sin(a) * qr * 0.6); park.add(pp); }
+    }
+    if (P.shelter) {
+      const [a0, a1, b0, b1] = P.shelter;
+      const bl = new THREE.Mesh(new THREE.BoxGeometry(a1 - a0, 4.2, b1 - b0), new THREE.MeshStandardMaterial({ color: 0x5b5e63, roughness: 0.7 }));
+      bl.position.set((a0 + a1) / 2, 2.2, (b0 + b1) / 2); bl.castShadow = bl.receiveShadow = true; park.add(bl);
+    }
+    if (P.parking) {
+      const [a0, a1, b0, b1] = P.parking;
+      const lot = new THREE.Mesh(new THREE.PlaneGeometry(a1 - a0, b1 - b0).rotateX(-Math.PI / 2), roadMat); lot.position.set((a0 + a1) / 2, 0.24, (b0 + b1) / 2); park.add(lot);
+      for (let z = b0; z <= b1 + 0.01; z += 2.5) stripe(marks, a0 + 2.5, z, 5, 0.12);
+      for (const m of marks.slice(-Math.floor((b1 - b0) / 2.5) - 1)) m.translate(0, 0.15, 0);
     }
   }
+  // the streets feeding the plazas: the north stub off Shin-Maru's street, the end of the z=68 street
+  for (const [a0, a1, b0, b1] of [[-142, -132, -127, -94], [-152, -131, 62, 74]]) {
+    const r = new THREE.Mesh(new THREE.PlaneGeometry(a1 - a0, b1 - b0).rotateX(-Math.PI / 2), roadMat);
+    r.position.set((a0 + a1) / 2, 0.075, (b0 + b1) / 2); r.receiveShadow = true; park.add(r);
+  }
+  for (let z = -124; z < -97; z += 6) stripe(marks, -137, z, 0.15, 3);
+  // open-air car park: asphalt, two rows of striped bays either side of an aisle
+  {
+    const C = CARPARK;
+    const lot = new THREE.Mesh(new THREE.PlaneGeometry(C.x1 - C.x0, C.z1 - C.z0).rotateX(-Math.PI / 2), roadMat);
+    lot.position.set((C.x0 + C.x1) / 2, 0.08, (C.z0 + C.z1) / 2); lot.receiveShadow = true; park.add(lot);
+    for (let x = C.x0 + 1; x <= C.x1 - 1 + 0.01; x += 2.5) { stripe(marks, x, C.z0 + 3, 0.12, 5); stripe(marks, x, C.z1 - 3, 0.12, 5); }
+    stripe(marks, (C.x0 + C.x1) / 2, (C.z0 + C.z1) / 2, C.x1 - C.x0 - 2, 0.15);
+    for (const [a, b, c, d] of [[C.x0 - 0.3, C.x1 + 0.3, C.z0 - 0.3, C.z0], [C.x0 - 0.3, C.x1 + 0.3, C.z1, C.z1 + 0.3]]) {
+      const k = new THREE.Mesh(new THREE.BoxGeometry(b - a, 0.18, d - c), kerbMat); k.position.set((a + b) / 2, 0.09, (c + d) / 2); park.add(k);
+    }
+  }
+  // zebra crossings where the plaza footways cross the stubs / the street end
+  const zebraAcross = (x, z, w, alongX) => { for (let k = -w / 2 + 0.4; k < w / 2; k += 0.9) stripe(marks, alongX ? x + k : x, alongX ? z : z + k, alongX ? 0.45 : 3, alongX ? 3 : 0.45); };
+  zebraAcross(-137, -104, 10, true);           // across the north stub
+  zebraAcross(-145, 68, 12, false);            // across the street to the south plaza
+  zebraAcross(-137, -121 + 9, 10, true);
+  if (marks.length) { const m = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(marks), paint); m.receiveShadow = true; park.add(m); }
   // tree lines along the plaza edges and the axis
   const rng = (() => { let s = 424242; return () => (s = s * 16807 % 2147483647) / 2147483647; })();
   const spots = [];
@@ -2049,7 +2148,8 @@ const ROTARIES = [{ x: -104, z: -58, r: 17 }, { x: -106, z: 40, r: 16 }];
     const tx = x + (zz === 17 ? 4 : 0);
     if (Math.abs(tx + 213) > 9) spots.push([tx, s * zz]);                     // not across Naka-dori
   }
-  const clear = ([px, pz]) => ROTARIES.every(R => Math.hypot(px - R.x, pz - R.z) > R.r + 2);
+  const noTree = [...plazaRects, [CARPARK.x0, CARPARK.x1, CARPARK.z0, CARPARK.z1], [-143, -131, -125, -88], [-150, -131, 61, 75]];
+  const clear = ([px, pz]) => noTree.every(R => !inRect(px, pz, R, 2));
   const pts = spots.filter(clear);
   const trunkGeo = new THREE.CylinderGeometry(0.14, 0.2, 1.8, 6);
   const crownGeo = new THREE.SphereGeometry(1.5, 8, 6);
@@ -3215,7 +3315,8 @@ const cityFar = new THREE.Group();
     const node = (x, z) => { const k = x.toFixed(1) + ',' + z.toFixed(1); if (key.has(k)) return key.get(k);
       const n = { x, z, e: [], ph: Math.random() * 40 }; nodes.push(n); key.set(k, n); return n; };
     const roadBlock = [...LM.map(b => [b.x0, b.x1, b.z0, b.z1]), ...hug.map(b => [b.x0, b.x1, b.z0, b.z1]),
-      [GR.x0, GR.x1, GR.z0, GR.z1], [SITE.x0, SITE.x1, SITE.z0, SITE.z1], [PLAZA.x0 - 3, -50, PLAZA.z0 - 3, PLAZA.z1 + 3], [PLAZA.x0 - 130, PLAZA.x0, -9, 9]];
+      [GR.x0, GR.x1, GR.z0, GR.z1], [SITE.x0, SITE.x1, SITE.z0, SITE.z1], [-131, -50, PLAZA.z0 - 3, PLAZA.z1 + 3], [PLAZA.x0 - 130, PLAZA.x0, -9, 9],
+      [-143, -131, -92, 64]];               // the station-front street is footway between the two traffic plazas
     const clearRoad = (a, b) => {
       const L = Math.hypot(b.x - a.x, b.z - a.z);
       for (let d = 0; d <= L; d += 3) {
@@ -3233,6 +3334,8 @@ const cityFar = new THREE.Group();
     for (const [x, w] of NS_W) for (let j = 0; j < zsW.length - 1; j++) link(node(x, zsW[j]), node(x, zsW[j + 1]), 'ns', w);
     for (const [z, w] of EW_W) { if (z <= -700 || z >= 700) continue;
       for (let i = 0; i < NS_W.length - 1; i++) link(node(NS_W[i][0], z), node(NS_W[i + 1][0], z), 'ew', w); }
+    // the stub into the north traffic plaza (the south one opens off the z=68 street end)
+    link(node(-137, -121), node(TPLAZAS[0].mouth[0], TPLAZAS[0].mouth[1]), 'ns', 10);
     // Yaesu / Nihonbashi: offsets from Sotobori-dori × E-W streets
     const zsE = EW_E.map(q => q[0]).filter(z => z > -700 && z < 700);
     for (const [o, w] of NS_E) for (let j = 0; j < zsE.length - 1; j++)
@@ -3268,9 +3371,52 @@ const cityFar = new THREE.Group();
       const e = live[(Math.random() * live.length) | 0];
       cars.push(mk(pickKind(), { mode: 'grid', e, fwd: Math.random() < 0.5, s: Math.random() * e.len }));
     }
-    // roundabouts: taxis and buses, clockwise (keep left)
-    for (const R of ROTARIES) for (let i = 0; i < 6; i++)
-      cars.push(mk(i % 3 === 2 ? 'bus' : 'taxi', { mode: 'ring', R, ang: i / 6 * Math.PI * 2 + Math.random() * 0.3, rad: R.r * 0.78 }));
+    // traffic plazas: each visit is one polyline — street node → stub → (almost)
+    // a lap of the loop → stub → street; one stop on the way (bus stop / taxi
+    // stand / drop-off), then the vehicle carries on as ordinary street traffic
+    const PZ = TPLAZAS.map(P => {
+      const loop = loopPts(P), mouth = key.get(P.mouth[0].toFixed(1) + ',' + P.mouth[1].toFixed(1));
+      const near = (q) => { let bi = 0, bd = 1e9; loop.forEach(([x, z], i) => { const d = Math.hypot(x - q[0], z - q[1]); if (d < bd) { bd = d; bi = i; } }); return bi; };
+      return { P, loop, mouth, iE: near(P.E), iX: near(P.X), n: 0 };
+    });
+    const polyOf = pts => { const segs = []; let L = 0;
+      for (let i = 0; i < pts.length - 1; i++) { const [ax, az] = pts[i], [bx, bz] = pts[i + 1], l = Math.hypot(bx - ax, bz - az); if (l < 0.01) continue; segs.push({ ax, az, dx: (bx - ax) / l, dz: (bz - az) / l, s0: L, l }); L += l; }
+      return { segs, L }; };
+    function visit(v, Z, from) {
+      const { P, loop, iE, iX } = Z, pts = [];
+      if (from) pts.push([from.x, from.z]);
+      pts.push(P.mouth, P.conn);
+      for (let i = iE; ; i = (i + 1) % loop.length) { pts.push(loop[i]); if (i === iX) break; }
+      pts.push(P.conn, P.mouth);
+      const path = polyOf(pts);
+      // the stop: the loop vertex nearest a bay for this kind
+      const bays = v.kind === 'bus' ? P.stops.bus : v.kind === 'taxi' ? P.stops.taxi : P.stops.car;
+      const bay = bays[(Math.random() * bays.length) | 0];
+      let sStop = 0, bd = 1e9;
+      for (const g of path.segs) { const d = Math.hypot(g.ax - bay[0], g.az - bay[1]); if (d < bd && g.s0 > 15) { bd = d; sStop = g.s0; } }
+      Object.assign(v, { mode: 'plz', Z, path, s: 0, sStop, dwell: v.kind === 'bus' ? 14 + Math.random() * 12 : v.kind === 'taxi' ? 8 + Math.random() * 14 : 4 + Math.random() * 4, stopped: false, vmax: 7 });
+      Z.n++;
+    }
+    function leavePlaza(v) {
+      const Z = v.Z; Z.n--;
+      const e = Z.mouth && Z.mouth.e[0];
+      if (!e) { visit(v, Z); return; }
+      Object.assign(v, { mode: 'grid', e, fwd: e.a === Z.mouth, s: 0, vmax: (v.kind === 'bus' ? 9 : 11) + Math.random() * 4, homeT: 40 + Math.random() * 80 });
+    }
+    for (const Z of PZ) for (let i = 0; i < 6; i++) {
+      const v = mk(i < 2 ? 'bus' : i < 5 ? 'taxi' : 'car', {}); v.home = Z;
+      visit(v, Z); v.s = Math.random() * v.path.L * 0.9; if (v.s > v.sStop) v.stopped = true;
+      cars.push(v);
+    }
+    // parked cars: the open-air car park and the south island's bays
+    {
+      const C = CARPARK, spots = [];
+      for (let x = C.x0 + 2.25; x < C.x1 - 1; x += 2.5) { spots.push([x, C.z0 + 3, Math.PI]); spots.push([x, C.z1 - 3, 0]); }
+      const I = TPLAZAS[1].parking;
+      if (I) for (let z = I[2] + 1.25; z < I[3]; z += 2.5) spots.push([I[0] + 2.6, z, Math.PI / 2]);
+      for (const [x, z, yaw] of spots) if (Math.random() < 0.72)
+        cars.push(mk(Math.random() < 0.85 ? 'car' : 'van', { mode: 'park', px0: x, pz0: z, pyaw: yaw, vmax: 0 }));
+    }
     // Yaesu taxi pool beside the GranRoof: a queue that creeps forward as
     // the front taxi pulls out every 8-16 s (and rejoins at the back)
     const POOLS = [{ ax: GR.x1 + 8, az: GR.z1 - 6, dx: 0, dz: -1, L: GR.z1 - GR.z0 - 12, q: [], timer: 4 },
@@ -3334,14 +3480,55 @@ const cityFar = new THREE.Group();
           v.v += Math.max(-6 * dt, Math.min(2.2 * dt, want - v.v));
           v.s += v.v * dt;
           if (v.s >= e.len) {                                                  // pick the next street
-            const n = end, opts = n.e.filter(q => q !== e);
-            const ne = opts.length ? opts[(Math.random() * opts.length) | 0] : e;
-            v.s -= e.len; if (ne === e) v.s = 0;
-            v.fwd = ne.a === n; v.e = ne;
+            const n = end, opts = n.e.filter(q => q !== e), Z = PZ.find(q => q.mouth === n);
+            if (Z && Z.n < 8) { visit(v, Z); v.s = 0; }                      // turn into the traffic plaza
+            else if (!opts.length) { v.s = 0; v.fwd = !v.fwd; v.v *= 0.3; }  // dead end: turn round
+            else {
+              const ne = opts[(Math.random() * opts.length) | 0];
+              v.s -= e.len; v.fwd = ne.a === n; v.e = ne;
+            }
           }
+          // plaza regulars come back (out of sight) once they have been away a while
+          if (v.mode === 'grid' && v.home && (v.homeT -= dt) < 0) {
+            const Z = v.home, m = Z.mouth;
+            if (m && Z.n < 7 && (v.px - camera.position.x) ** 2 + (v.pz - camera.position.z) ** 2 > 260 * 260 &&
+                (m.x - camera.position.x) ** 2 + (m.z - camera.position.z) ** 2 > 140 * 140) {
+              const e0 = m.e[0], far = e0 ? (e0.a === m ? e0.b : e0.a) : null;
+              visit(v, Z, far); v.init = false;
+            } else v.homeT = 10;
+          }
+        }
+        if (v.mode === 'grid') {
           const E = v.e, sg = v.fwd ? 1 : -1, s = v.fwd ? v.s : E.len - v.s;
           x = E.a.x + E.dx * s; z = E.a.z + E.dz * s; dx = E.dx * sg; dz = E.dz * sg;
           lane = Math.max(2.2, E.w / 4);
+        } else if (v.mode === 'plz') {
+          const path = v.path;
+          // follow whoever is ahead in the plaza (same heading, a lane width aside at most)
+          let limit = v.stopped ? path.L + 50 : v.sStop;
+          if (v.stopped || v.s > v.sStop + 0.5) limit = path.L + 50;
+          if (v.hold > 0) { v.hold -= dt; limit = v.s; if (v.hold <= 0) v.stopped = true; }
+          else if (!v.stopped && v.s >= v.sStop - 0.4) { v.hold = v.dwell; limit = v.s; }
+          const hx = Math.sin(v.yaw), hz = Math.cos(v.yaw);
+          for (const o of cars) {
+            if (o === v || o.mode !== 'plz' || o.Z !== v.Z || !o.init || !v.init) continue;
+            const rx = o.px - v.px, rz = o.pz - v.pz, ahead = rx * hx + rz * hz;
+            if (ahead <= 0 || ahead > 16 || Math.abs(rx * hz - rz * hx) > 1.8) continue;
+            limit = Math.min(limit, v.s + ahead - (o.K.L + v.K.L) / 2 - 1.6);
+          }
+          const want = Math.max(0, Math.min(v.vmax, (limit - v.s) * 0.9));
+          v.v += Math.max(-5 * dt, Math.min(2 * dt, want - v.v)); v.s += v.v * dt;
+          if (v.s >= path.L) { leavePlaza(v); }
+          if (v.mode === 'plz') {
+            let g = path.segs[0]; for (const q of path.segs) if (v.s >= q.s0) g = q;
+            const u = Math.min(g.l, v.s - g.s0);
+            x = g.ax + g.dx * u; z = g.az + g.dz * u; dx = g.dx; dz = g.dz; lane = 1.6;
+          } else {
+            const E = v.e, sg = v.fwd ? 1 : -1, s = v.fwd ? v.s : E.len - v.s;
+            x = E.a.x + E.dx * s; z = E.a.z + E.dz * s; dx = E.dx * sg; dz = E.dz * sg; lane = Math.max(2.2, E.w / 4);
+          }
+        } else if (v.mode === 'park') {
+          x = v.px0; z = v.pz0; dx = Math.sin(v.pyaw); dz = Math.cos(v.pyaw); lane = 0;
         } else if (v.mode === 'ring') {
           v.ang -= (8 / v.rad) * dt;                                             // clockwise
           x = v.R.x + Math.cos(v.ang) * v.rad; z = v.R.z + Math.sin(v.ang) * v.rad;
@@ -3452,19 +3639,16 @@ const cityFar = new THREE.Group();
       }
       // plaza: entrances (north / centre / south) ↔ plaza corners, bus stops, street crossings
       const P0 = PLAZA, ents = [[-77, -86], [-77, -6], [-77, 6], [-77, 86], [-77, -40], [-77, 40]];
-      const outs = [[P0.x0 + 2, P0.z0 + 4], [P0.x0 + 2, P0.z1 - 4], [P0.x0 + 2, -14], [P0.x0 + 2, 14], [-110, P0.z0 + 2], [-110, P0.z1 - 2],
-        ...ROTARIES.map(R => [R.x, R.z + R.r + 4.5])];
-      // never across a roundabout's carriageway
-      const segOK = (a, b) => ROTARIES.every(R => {
-        const vx = b[0] - a[0], vz = b[1] - a[1], L2 = vx * vx + vz * vz || 1;
-        const k = Math.max(0, Math.min(1, ((R.x - a[0]) * vx + (R.z - a[1]) * vz) / L2));
-        return Math.hypot(a[0] + vx * k - R.x, a[1] + vz * k - R.z) > R.r + 4;
-      });
+      const outs = [[P0.x0 + 2, -14], [P0.x0 + 2, 14], [-100, -97], [-131, -104], [-100, 90], [-142, 76],
+        ...TPLAZAS.flatMap(P => [...P.stops.bus.map(([x, z]) => [x + 3.5, z]), ...P.stops.taxi.map(([x, z]) => [x, z + (z > P.z1 - 1 ? 3.5 : -3.5)])])];
+      // never across a traffic plaza's carriageway or the car park
+      const avoid = [...plazaRects, [CARPARK.x0, CARPARK.x1, CARPARK.z0, CARPARK.z1]];
+      const segOK = (a, b) => avoid.every(R => !segHitsRect(a, b, R, 2.6));
       const pickTo = (from, list) => { for (let k = 0; k < 12; k++) { const c = list[(Math.random() * list.length) | 0]; if (c !== from && segOK(from, c)) return c; } return null; };
       for (let i = 0; i < 90; i++) {
         const a = ents[(Math.random() * ents.length) | 0], b = pickTo(a, outs);
         if (!b) continue;
-        peds.push({ mode: 'plaza', a, b, k: Math.random(), v: 1.1 + Math.random() * 0.4, col: COLS[(Math.random() * COLS.length) | 0], ph: Math.random() * 6, dir: Math.random() < 0.5 ? 1 : -1, j: (Math.random() - 0.5) * 6 });
+        peds.push({ mode: 'plaza', a, b, k: Math.random(), v: 1.1 + Math.random() * 0.4, col: COLS[(Math.random() * COLS.length) | 0], ph: Math.random() * 6, dir: Math.random() < 0.5 ? 1 : -1, j: (Math.random() - 0.5) * 4 });
       }
       const pm = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.75, 1.62), new THREE.MeshBasicMaterial({ map: tex, alphaTest: 0.5, side: THREE.DoubleSide }), peds.length);
       pm.frustumCulled = false; pm.userData.noFade = pm.userData.noOcclude = true;
@@ -3551,7 +3735,7 @@ const cityFar = new THREE.Group();
             if (p.k > 1 || p.k < 0) {                     // arrived: pick a new destination from where they stand
               const at = p.k > 1 ? p.b : p.a, isEnt = ents.includes(at);
               const nxt = pickTo(at, isEnt ? outs : ents) || (at === p.a ? p.b : p.a);
-              p.a = at; p.b = nxt; p.k = 0; p.dir = 1; p.j = (Math.random() - 0.5) * 6;
+              p.a = at; p.b = nxt; p.k = 0; p.dir = 1; p.j = (Math.random() - 0.5) * 4;
             }
             const nx = -(p.b[1] - p.a[1]) / L, nz = (p.b[0] - p.a[0]) / L, w = Math.sin(Math.PI * p.k) * p.j;
             x = p.a[0] + (p.b[0] - p.a[0]) * p.k + nx * w; z = p.a[1] + (p.b[1] - p.a[1]) * p.k + nz * w; y = 0.08;
