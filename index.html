@@ -3246,6 +3246,17 @@ const cityFar = new THREE.Group();
     // roundabouts: taxis and buses, clockwise (keep left)
     for (const R of ROTARIES) for (let i = 0; i < 6; i++)
       cars.push(mk(i % 3 === 2 ? 'bus' : 'taxi', { mode: 'ring', R, ang: i / 6 * Math.PI * 2 + Math.random() * 0.3, rad: R.r * 0.78 }));
+    // Yaesu taxi pool beside the GranRoof: a queue that creeps forward as
+    // the front taxi pulls out every 8-16 s (and rejoins at the back)
+    const POOLS = [{ ax: GR.x1 + 8, az: GR.z1 - 6, dx: 0, dz: -1, L: GR.z1 - GR.z0 - 12, q: [], timer: 4 },
+                   { ax: GR.x1 + 13, az: GR.z1 - 6, dx: 0, dz: -1, L: GR.z1 - GR.z0 - 12, q: [], timer: 9, bus: true }];
+    for (const P of POOLS) {
+      const n = Math.min(P.bus ? 5 : 16, Math.floor((P.L - 16) / (P.bus ? 14 : 6)));
+      for (let k = 0; k < n; k++) {
+        const v = mk(P.bus ? 'bus' : 'taxi', { mode: 'pool', P, s: P.L - 8 - k * (P.bus ? 14 : 6), vmax: 5 });
+        P.q.push(v); cars.push(v);
+      }
+    }
     // expressways: polylines both ways at deck height
     const ROUTES = [];
     const poly = (pts, y, w) => { const segs = []; let L = 0;
@@ -3281,6 +3292,10 @@ const cityFar = new THREE.Group();
       const lanes = new Map();
       for (const v of cars) if (v.mode === 'grid') { const k = v.e.id * 2 + (v.fwd ? 1 : 0); (lanes.get(k) || lanes.set(k, []).get(k)).push(v); }
       for (const L of lanes.values()) { L.sort((a, b) => a.s - b.s); L.forEach((v, i) => { v.lead = L[i + 1] || null; }); }
+      for (const P of POOLS) {
+        P.timer -= dt;
+        if (P.timer <= 0 && P.q.length && P.q[0].v < 0.2) { const f = P.q.shift(); f.leaving = true; P.timer = (P.bus ? 14 : 8) + Math.random() * 8; }
+      }
       for (const v of cars) {
         let x, z, y = 0.3, dx, dz, lane = 2.4;
         if (v.mode === 'grid') {
@@ -3306,6 +3321,15 @@ const cityFar = new THREE.Group();
           v.ang -= (8 / v.rad) * dt;                                             // clockwise
           x = v.R.x + Math.cos(v.ang) * v.rad; z = v.R.z + Math.sin(v.ang) * v.rad;
           dx = Math.sin(v.ang); dz = -Math.cos(v.ang); lane = 0; y = 0.36;
+        } else if (v.mode === 'pool') {
+          const P = v.P, gap = P.bus ? 14 : 6;
+          let tgt;
+          if (v.leaving) tgt = P.L + 40;
+          else { const i = P.q.indexOf(v); tgt = P.L - 8 - i * gap; if (i > 0) tgt = Math.min(tgt, P.q[i - 1].s - gap); }
+          const want = Math.max(0, Math.min(v.vmax, (tgt - v.s) * 0.8));
+          v.v += Math.max(-4 * dt, Math.min(1.8 * dt, want - v.v)); v.s += v.v * dt;
+          if (v.leaving && v.s > P.L + 30) { v.leaving = false; v.s = -30; v.v = 4; P.q.push(v); }
+          x = P.ax + P.dx * v.s; z = P.az + P.dz * v.s; dx = P.dx; dz = P.dz; lane = 0;
         } else {
           const r = v.r; v.s = (v.s + v.vmax * dt) % r.L;
           const s = v.fwd ? v.s : r.L - v.s; let g = r.segs[0];
