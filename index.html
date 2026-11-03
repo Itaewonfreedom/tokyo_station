@@ -4972,7 +4972,7 @@ const crowd = (() => {
   function wander(dt) {
     wanderT -= dt; if (wanderT > 0) return;
     wanderT = 0.6 + Math.random() * 0.8;
-    if (people.filter(p => p.amb).length > 70) return;
+    if (people.filter(p => p.amb).length > 90) return;
     const pi = (Math.random() * PLATFORMS.length) | 0, pl = PLATFORMS[pi];
     if (!STAIRS[pi].length) return;
     const zz = pl.off + (Math.random() - 0.5) * (pl.len - 70);
@@ -4981,7 +4981,7 @@ const crowd = (() => {
     const up = fromStairs(pl, x, zz), down = toStairs(pl, x, zz + (Math.random() < 0.5 ? -1 : 1) * 30);
     if (!up || !down) return;
     const mid = onPlat(pl, x, zz);
-    add(pl, null, up.concat([[mid[0], surf(pl), mid[1]]], down), { amb: true, sink: true, pauseAt: up.length, linger: 1 + Math.random() * 6 });
+    add(pl, null, up.concat([[mid[0], surf(pl), mid[1]]], down), { amb: true, sink: true, pauseAt: up.length, linger: 3 + Math.random() * 15 });     // most people stand and wait a while
   }
   function update(dt) {
     wander(dt);
