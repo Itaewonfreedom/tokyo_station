@@ -2038,7 +2038,12 @@ const ROTARIES = [{ x: -104, z: -58, r: 17 }, { x: -106, z: 40, r: 16 }];
   const spots = [];
   for (let z = z0 + 4; z < z1 - 2; z += 7) spots.push([x0 + 3 + rng(), z]);
   for (let x = x0 + 8; x < x1 - 14; x += 7) { spots.push([x, z0 + 3 + rng()]); spots.push([x, z1 - 3 - rng()]); }
-  for (let x = x0 - 110; x < x0; x += 8) for (const s of [-1, 1]) spots.push([x, s * 10]);
+  // Gyoko-dori: a granite promenade with four rows of ginkgo between the Maru and Shin-Maru buildings
+  flat(x0 + 288, 38, paveMat, (x0 - 288) / 2, 0.03, 0);
+  for (let x = x0 - 144; x < x0 - 2; x += 8) for (const s of [-1, 1]) for (const zz of [10, 17]) {
+    const tx = x + (zz === 17 ? 4 : 0);
+    if (Math.abs(tx + 213) > 9) spots.push([tx, s * zz]);                     // not across Naka-dori
+  }
   const clear = ([px, pz]) => ROTARIES.every(R => Math.hypot(px - R.x, pz - R.z) > R.r + 2);
   const pts = spots.filter(clear);
   const trunkGeo = new THREE.CylinderGeometry(0.14, 0.2, 1.8, 6);
@@ -2878,7 +2883,7 @@ const cityFar = new THREE.Group();
   const SOTO = z => 160 - 0.0625 * z;               // Sotobori-dori, tilted like the map
   const NS_W = [[-137, 10], [-213, 14], [-299, 22]];
   const EW_W = [[-720, 12], [-630, 12], [-545, 12], [-455, 14], [-385, 12], [-320, 12], [-263, 22], [-190, 12], [-121, 14],
-    [-8, 14], [68, 12], [177, 14], [278, 18], [347, 22], [410, 12], [480, 12], [560, 12], [640, 12], [730, 12]];
+    [0, 40], [68, 12], [177, 14], [278, 18], [347, 22], [410, 12], [480, 12], [560, 12], [640, 12], [730, 12]];
   const NS_E = [[0, 20], [52, 10], [100, 10], [148, 18], [200, 10], [250, 10], [300, 10]];     // offsets from Sotobori-dori
   const EW_E = [[-720, 12], [-620, 12], [-540, 12], [-455, 12], [-390, 12], [-330, 12], [-263, 22], [-205, 10], [-150, 10],
     [-95, 10], [-40, 10], [15, 14], [70, 10], [125, 10], [180, 10], [235, 10], [293, 10], [347, 24], [410, 10], [470, 10],
