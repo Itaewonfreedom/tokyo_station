@@ -3487,6 +3487,7 @@ const cityFar = new THREE.Group();
       }
       const pedUpdate = dt => {
         const cx = camera.position.x, cz = camera.position.z; pf++;
+        pm.material.color.setScalar(1 - 0.55 * Math.min(1, lightK() * 1.4));      // unlit figures: dim them at night
         peds.forEach((p, i) => {
           let x, z, y = 0.16;
           if (p.mode === 'walk' && p.q) {
