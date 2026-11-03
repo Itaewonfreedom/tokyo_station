@@ -3492,9 +3492,13 @@ const cityFar = new THREE.Group();
           if (p.mode === 'walk' && p.q) {
             // corner / crosswalk waypoints: wait at the kerb for the walk phase
             const w = p.q[0];
-            if (w.axis && !p.go) { if (green(w.n, w.axis, clock)) p.go = true; }
+            if (w.axis && !p.go) {
+              // only step off with enough of the walk phase left to get across
+              const left = 20 - ((clock + w.n.ph) % 20 + 20) % 20, need = Math.hypot(w.x - p.x, w.z - p.z) / (p.v * 1.25) + 1;
+              if (green(w.n, w.axis, clock) && left > Math.min(need, 16)) p.go = true;
+            }
             if (!w.axis || p.go) {
-              const ddx = w.x - p.x, ddz = w.z - p.z, d = Math.hypot(ddx, ddz), st = p.v * dt;
+              const ddx = w.x - p.x, ddz = w.z - p.z, d = Math.hypot(ddx, ddz), st = p.v * (w.axis ? 1.25 : 1) * dt;
               if (d <= st) { p.x = w.x; p.z = w.z; p.q.shift(); p.go = false; if (!p.q.length) { p.q = null; Object.assign(p, p.next); } }
               else { p.x += ddx / d * st; p.z += ddz / d * st; }
             } else p.ph -= dt * 9;                                  // standing still
