@@ -2753,7 +2753,19 @@ const cityFar = new THREE.Group();
 {
   const rng = (() => { let s = 1234567; return () => (s = s * 16807 % 2147483647) / 2147483647; })();
 
-  // podium: Marunouchi's 31 m ("100 shaku") street wall, with the tower set back above it
+  // podium: Marunouchi's 31 m ("100 shaku") street wall, with the tower set back above it.
+  // The podiums are warm stone with punched windows (not the tower's glass): all of
+  // them go into one merged mesh with world-unit UVs, one draw call in total.
+  const podiumGeos = [];
+  const stoneBox = (x, z, w, h, d, y0) => {
+    const g = new THREE.BoxGeometry(w, h, d), uv = g.attributes.uv;
+    for (let f = 0; f < 6; f++) for (let v = 0; v < 4; v++) {
+      const i = f * 4 + v;
+      if (f === 2 || f === 3) { uv.setXY(i, 0.004, 0.004); continue; }
+      uv.setXY(i, uv.getX(i) * (f < 2 ? d : w) / 13, uv.getY(i) * h / 15);
+    }
+    return g.translate(x, y0 + h / 2, z).toNonIndexed();
+  };
   function makeBuilding(x, z, w, d, h, taper, style = (rng() * 3) | 0, flatRoof = false, podium = 0) {
     const g = new THREE.Group();
     const mat = cityWindowMaterial(style, {
@@ -2770,8 +2782,7 @@ const cityFar = new THREE.Group();
     // a plain corner texel of the facade so rooftops no longer show windows.
     const parts = [];
     if (podium && h > podium + 15 && w > 22 && d > 22) {
-      parts.push(plainTop(new THREE.BoxGeometry(w, podium, d)).translate(0, podium / 2, 0));
-      parts.push(plainTop(new THREE.BoxGeometry(w + 0.6, 1.2, d + 0.6)).translate(0, podium + 0.6, 0));      // cornice at the 31 m line
+      podiumGeos.push(stoneBox(x, z, w, podium, d, 0), stoneBox(x, z, w + 0.6, 1.2, d + 0.6, podium));   // + cornice at the 31 m line
       const tw = w - 10, td = d - 10;
       parts.push(plainTop(new THREE.BoxGeometry(tw, h - podium, td)).translate(0, podium + (h - podium) / 2, 0));
       if (!flatRoof) parts.push(plainAll(new THREE.BoxGeometry(tw * 0.4, 4, td * 0.4)).translate(0, h + 2, 0));
@@ -2993,6 +3004,13 @@ const cityFar = new THREE.Group();
       }
       z += d + gap;
     }
+  }
+  if (podiumGeos.length) {
+    const mat = cityWindowMaterial(1, { color: 0xf2e4cf, roughness: 0.85, metalness: 0 });
+    setFacadeRepeat(mat, 1, 1); cityMats.push(mat);
+    const mesh = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(podiumGeos), mat);
+    mesh.castShadow = mesh.receiveShadow = true; mesh.userData.noFade = true;
+    cityNear.add(mesh);
   }
   for (const [key, geos] of small) {
     const mat = cityWindowMaterial(+key.split(':')[0], { roughness: 0.6, metalness: 0.1 });
