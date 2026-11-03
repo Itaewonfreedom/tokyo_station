@@ -3428,9 +3428,17 @@ const cityFar = new THREE.Group();
       // plaza: entrances (north / centre / south) ↔ plaza corners, bus stops, street crossings
       const P0 = PLAZA, ents = [[-77, -86], [-77, -6], [-77, 6], [-77, 86], [-77, -40], [-77, 40]];
       const outs = [[P0.x0 + 2, P0.z0 + 4], [P0.x0 + 2, P0.z1 - 4], [P0.x0 + 2, -14], [P0.x0 + 2, 14], [-110, P0.z0 + 2], [-110, P0.z1 - 2],
-        ...ROTARIES.map(R => [R.x, R.z + R.r + 2])];
+        ...ROTARIES.map(R => [R.x, R.z + R.r + 4.5])];
+      // never across a roundabout's carriageway
+      const segOK = (a, b) => ROTARIES.every(R => {
+        const vx = b[0] - a[0], vz = b[1] - a[1], L2 = vx * vx + vz * vz || 1;
+        const k = Math.max(0, Math.min(1, ((R.x - a[0]) * vx + (R.z - a[1]) * vz) / L2));
+        return Math.hypot(a[0] + vx * k - R.x, a[1] + vz * k - R.z) > R.r + 4;
+      });
+      const pickTo = (from, list) => { for (let k = 0; k < 12; k++) { const c = list[(Math.random() * list.length) | 0]; if (c !== from && segOK(from, c)) return c; } return null; };
       for (let i = 0; i < 90; i++) {
-        const a = ents[(Math.random() * ents.length) | 0], b = outs[(Math.random() * outs.length) | 0];
+        const a = ents[(Math.random() * ents.length) | 0], b = pickTo(a, outs);
+        if (!b) continue;
         peds.push({ mode: 'plaza', a, b, k: Math.random(), v: 1.1 + Math.random() * 0.4, col: COLS[(Math.random() * COLS.length) | 0], ph: Math.random() * 6, dir: Math.random() < 0.5 ? 1 : -1, j: (Math.random() - 0.5) * 6 });
       }
       const pm = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.75, 1.62), new THREE.MeshBasicMaterial({ map: tex, alphaTest: 0.5, side: THREE.DoubleSide }), peds.length);
@@ -3512,7 +3520,7 @@ const cityFar = new THREE.Group();
             p.k += p.dir * p.v * dt / L;
             if (p.k > 1 || p.k < 0) {                     // arrived: pick a new destination from where they stand
               const at = p.k > 1 ? p.b : p.a, isEnt = ents.includes(at);
-              const nxt = isEnt ? outs[(Math.random() * outs.length) | 0] : ents[(Math.random() * ents.length) | 0];
+              const nxt = pickTo(at, isEnt ? outs : ents) || (at === p.a ? p.b : p.a);
               p.a = at; p.b = nxt; p.k = 0; p.dir = 1; p.j = (Math.random() - 0.5) * 6;
             }
             const nx = -(p.b[1] - p.a[1]) / L, nz = (p.b[0] - p.a[0]) / L, w = Math.sin(Math.PI * p.k) * p.j;
