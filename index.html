@@ -3007,6 +3007,8 @@ const cityFar = new THREE.Group();
   }
   if (podiumGeos.length) {
     const mat = cityWindowMaterial(1, { color: 0xf2e4cf, roughness: 0.85, metalness: 0 });
+    const obc = mat.onBeforeCompile;          // a busy-office seed: most podium floors stay lit in the evening
+    mat.onBeforeCompile = sh => { obc(sh); sh.uniforms.uSeed.value = 101; };
     setFacadeRepeat(mat, 1, 1); cityMats.push(mat);
     const mesh = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(podiumGeos), mat);
     mesh.castShadow = mesh.receiveShadow = true; mesh.userData.noFade = true;
