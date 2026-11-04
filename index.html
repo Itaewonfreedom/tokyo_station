@@ -3441,8 +3441,13 @@ const cityFar = new THREE.Group();
       for (const z of [136, 165, 200, 235, 270, 305, 330]) { const n = node(tsS(z), z); if (!prev || clearRoad(prev, n)) { if (prev) { link(prev, n, 'ns', 14); edges[edges.length - 1].ts = true; } prev = n; } else break; }
       // the street in front of KITTE, round its cut corner to the track-side street (as in the photo)
       if (TRACKSIDE.southStart = key.get(tsS(136).toFixed(1) + ',' + (136).toFixed(1))) {
-        const m = key.get((-137).toFixed(1) + ',' + (98).toFixed(1)), a = node(-100, 98);
-        if (m && clearRoad(m, a) && clearRoad(a, TRACKSIDE.southStart)) { link(m, a, 'ew', 12); link(a, TRACKSIDE.southStart, 'ns', 12); TRACKSIDE.kitte = true; }
+        // the diagonal runs parallel to KITTE's bent facade, ~5.5 m off it (px line x - y = -1214)
+        const m = key.get((-137).toFixed(1) + ',' + (98).toFixed(1)), a = node(frontX(1318 - 1214), 98), c = node(frontX(1430 - 1214), zOf(1430));
+        if (m && clearRoad(m, a) && clearRoad(a, c) && clearRoad(c, TRACKSIDE.southStart)) {
+          link(m, a, 'ew', 12); edges[edges.length - 1].paved = true;
+          link(a, c, 'ns', 10); edges[edges.length - 1].paved = true;
+          link(c, TRACKSIDE.southStart, 'ns', 10); edges[edges.length - 1].paved = true; TRACKSIDE.kitte = true;
+        }
       }
       const j = key.get(NS_W[0][0].toFixed(1) + ',' + (347).toFixed(1));
       if (prev && j) { const m = node(tsS(347), 347); if (clearRoad(prev, m)) { link(prev, m, 'ns', 14); edges[edges.length - 1].ts = true; } if (clearRoad(m, j)) link(m, j, 'ew', 14); }
@@ -3684,7 +3689,7 @@ const cityFar = new THREE.Group();
         const cutA = e.a.e.length > 2 ? 10 : 2, cutB = e.b.e.length > 2 ? 10 : 2;
         for (let d = cutA; d < e.len - cutB; d += 6) {
           const x = e.a.x + e.dx * d, z = e.a.z + e.dz * d;
-          dash.push(new THREE.PlaneGeometry(0.15, 3).rotateX(-Math.PI / 2).rotateY(yaw).translate(x, 0.03, z));
+          dash.push(new THREE.PlaneGeometry(0.15, 3).rotateX(-Math.PI / 2).rotateY(yaw).translate(x, e.paved ? 0.22 : 0.03, z));
         }
         // street lamps every ~32m on both kerbs of the wider streets
         if (e.w >= 12) for (let d = 14; d < e.len - 8; d += 32) for (const sd of [-1, 1]) {
@@ -3705,6 +3710,18 @@ const cityFar = new THREE.Group();
       for (const list of [dash, zebra]) if (list.length) {
         const m = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(list), paint);
         m.receiveShadow = true; m.userData.noFade = m.userData.noOcclude = true; cityFar.add(m);
+      }
+      // streets laid over block paving (round KITTE's corner): their own asphalt, kerb to kerb
+      {
+        const asp = [];
+        for (const e of live) if (e.paved) {
+          const yaw = Math.atan2(e.dx, e.dz);
+          asp.push(new THREE.PlaneGeometry(e.w, e.len + e.w * 0.6).rotateX(-Math.PI / 2).rotateY(yaw).translate((e.a.x + e.b.x) / 2, 0.2, (e.a.z + e.b.z) / 2));
+        }
+        if (asp.length) {
+          const m = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(asp), new THREE.MeshStandardMaterial({ color: 0x5b5e62, roughness: 1 }));
+          m.receiveShadow = true; m.userData.noFade = m.userData.noOcclude = true; cityFar.add(m);
+        }
       }
       // track-side streets: a footway on the town side with a row of ginkgo, a narrow one by the viaduct
       {
