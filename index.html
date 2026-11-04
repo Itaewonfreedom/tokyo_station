@@ -2010,7 +2010,7 @@ const PLAT_INFO = [
    satellite photo: a granite forecourt, the white axis toward the
    palace (Gyoko-dori), two lawns either side of it, the north and south
    bus/taxi roundabouts and tree lines round the edge ---------- */
-const PLAZA = { x0: -141, x1: -76, z0: -118, z1: 110 };
+const PLAZA = { x0: -141, x1: -76, z0: -118, z1: 90 };
 /* The north and south traffic plazas (駅前交通広場), as in the satellite
    photo: a one-way loop round an island, joined to the street by a short
    two-way stub. Clockwise seen from above (keep left: the bus doors and
@@ -2020,13 +2020,13 @@ const TPLAZAS = [
   { x0: -131, x1: -90, z0: -89, z1: -35, lane: 6.5, r: 10, mouth: [-137, -96], conn: [-133.5, -90.5], E: [-120, -89], X: [-131, -79],
     stops: { bus: [[-90, -71], [-90, -56]], taxi: [[-104, -35], [-112, -35], [-120, -35]], car: [[-102, -89]] },
     canopy: [-110, -53, 7], shelter: [-122, -100, -80, -68] },
-  { x0: -131, x1: -88, z0: 32, z1: 78, lane: 6.5, r: 10, mouth: [-137, 68], conn: [-133.5, 66], E: [-131, 57], X: [-131, 65],
+  { x0: -131, x1: -88, z0: 32, z1: 78, lane: 6.5, r: 10, mouth: [-137, 98], conn: [-134, 85], E: [-131, 68], X: [-131, 75],
     stops: { bus: [[-88, 47], [-88, 62]], taxi: [[-104, 32], [-112, 32], [-120, 32]], car: [[-102, 78]] },
     canopy: [-102, 55, 7], parking: [-124, -113, 41, 69] },
 ];
 // the open-air car park north of the north plaza (striped bays in the photo)
 const CARPARK = { x0: -130, x1: -93, z0: -117, z1: -99 };
-const TRACKSIDE = { north: null };     // set by the street graph
+const TRACKSIDE = { north: null, southStart: null, kitte: false };     // set by the street graph
 // clockwise centreline of a plaza loop, sampled every ~2 m
 function loopPts(P) {
   const h = P.lane / 2, x0 = P.x0 + h, x1 = P.x1 - h, z0 = P.z0 + h, z1 = P.z1 - h, r = P.r - h, out = [];
@@ -2116,7 +2116,7 @@ const plazaRects = TPLAZAS.map(P => [P.x0, P.x1, P.z0, P.z1]);
     }
   }
   // the streets feeding the plazas: the north stub off Shin-Maru's street, the end of the z=68 street
-  for (const [a0, a1, b0, b1] of [[-142, -132, -127, -94], [-152, -131, 62, 74]]) {
+  for (const [a0, a1, b0, b1] of [[-142, -132, -127, -94], [-152, -131, 92, 104]]) {
     const r = new THREE.Mesh(new THREE.PlaneGeometry(a1 - a0, b1 - b0).rotateX(-Math.PI / 2), roadMat);
     r.position.set((a0 + a1) / 2, 0.075, (b0 + b1) / 2); r.receiveShadow = true; park.add(r);
   }
@@ -2135,7 +2135,7 @@ const plazaRects = TPLAZAS.map(P => [P.x0, P.x1, P.z0, P.z1]);
   // zebra crossings where the plaza footways cross the stubs / the street end
   const zebraAcross = (x, z, w, alongX) => { for (let k = -w / 2 + 0.4; k < w / 2; k += 0.9) stripe(marks, alongX ? x + k : x, alongX ? z : z + k, alongX ? 0.45 : 3, alongX ? 3 : 0.45); };
   zebraAcross(-137, -104, 10, true);           // across the north stub
-  zebraAcross(-145, 68, 12, false);            // across the street to the south plaza
+  zebraAcross(-145, 98, 12, false);            // across the street to the south plaza
   zebraAcross(-137, -121 + 9, 10, true);
   if (marks.length) { const m = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(marks), paint); m.receiveShadow = true; park.add(m); }
   // tree lines along the plaza edges and the axis
@@ -2149,7 +2149,7 @@ const plazaRects = TPLAZAS.map(P => [P.x0, P.x1, P.z0, P.z1]);
     const tx = x + (zz === 17 ? 4 : 0);
     if (Math.abs(tx + 213) > 9) spots.push([tx, s * zz]);                     // not across Naka-dori
   }
-  const noTree = [...plazaRects, [CARPARK.x0, CARPARK.x1, CARPARK.z0, CARPARK.z1], [-143, -131, -125, -88], [-150, -131, 61, 75]];
+  const noTree = [...plazaRects, [CARPARK.x0, CARPARK.x1, CARPARK.z0, CARPARK.z1], [-143, -131, -125, -88], [-150, -131, 91, 105]];
   const clear = ([px, pz]) => noTree.every(R => !inRect(px, pz, R, 2));
   const pts = spots.filter(clear);
   const trunkGeo = new THREE.CylinderGeometry(0.14, 0.2, 1.8, 6);
@@ -2926,22 +2926,29 @@ const cityFar = new THREE.Group();
     if (o.kind === 'W') { x0 = frontX(o.px0); x1 = frontX(o.px1); }
     else if (o.kind === 'WE') { x1 = edgeL(z0, z1) - o.gap; x0 = x1 - o.w; }
     else { x0 = edgeR(z0, z1) + o.gap; x1 = x0 + o.w; }
-    LM.push({ ...o, x0, x1, z0, z1 });
+    const rects = o.rectsPx ? o.rectsPx.map(([a, b, c, d]) => [frontX(a), frontX(b), zOf(c), zOf(d)]) : [[x0, x1, z0, z1]];
+    LM.push({ ...o, x0, x1, z0, z1, rects });
   };
   // Marunouchi (west)
-  lm({ name: 'Shin-Marunouchi', kind: 'W', px0: 0, px1: 210, y0: 435, y1: 615, h: 198, style: 0, taper: true, heli: true });
-  lm({ name: 'Marunouchi Oazo', kind: 'W', px0: 110, px1: 215, y0: 226, y1: 345, h: 150, style: 0, heli: true });
-  lm({ name: 'Marunouchi Center', kind: 'W', px0: -40, px1: 100, y0: 260, y1: 440, h: 110, style: 2 });
-  lm({ name: 'Nippon Life Marunouchi', kind: 'WE', gap: 20, w: 44, y0: 226, y1: 400, h: 175, style: 1, heli: true });
-  lm({ name: 'Tokyo Station north annex', kind: 'WE', gap: 16, w: 34, y0: 400, y1: 530, h: 90, style: 2 });
+  // Footprints are the buildings' GROUND outlines read off the satellite photo (px),
+  // not their roofs: in the 3D photo tall towers lean, their roofs land tens of
+  // metres away from where they stand.
   lm({ name: 'Otemachi north', kind: 'W', px0: -60, px1: 150, y0: -120, y1: 140, h: 120, style: 1 });
-  lm({ name: 'KITTE', kind: 'W', px0: 0, px1: 190, y0: 1345, y1: 1610, h: 44, style: 2 });
-  lm({ name: 'JP Tower', kind: 'W', px0: 0, px1: 130, y0: 1400, y1: 1590, h: 200, style: 0, heli: true });
-  lm({ name: 'Tokyo Building', kind: 'WE', gap: 18, w: 60, y0: 1630, y1: 1810, h: 164, style: 0, taper: true, heli: true });
-  lm({ name: 'Marunouchi Park Building', kind: 'WE', gap: 18, w: 64, y0: 1830, y1: 2040, h: 157, style: 0, heli: true });
+  lm({ name: 'Otemachi east', kind: 'W', px0: 175, px1: 395, y0: 20, y1: 150, h: 95, style: 1 });
+  lm({ name: 'Marunouchi Oazo', kind: 'W', px0: 132, px1: 212, y0: 228, y1: 340, h: 150, style: 0, heli: true });
+  lm({ name: 'Nippon Life Marunouchi', kind: 'W', px0: 245, px1: 345, y0: 228, y1: 390, h: 160, style: 1, heli: true });
+  lm({ name: 'Marunouchi Center', kind: 'W', px0: -40, px1: 100, y0: 265, y1: 395, h: 100, style: 2 });
+  lm({ name: 'Marunouchi north (curved)', kind: 'W', custom: 'curved', px0: 235, px1: 338, y0: 385, y1: 560, h: 70, style: 2,
+    poly: [[235, 385], [300, 385], [318, 403], [332, 438], [338, 478], [332, 518], [313, 548], [290, 560], [235, 560]] });
+  lm({ name: 'Shin-Marunouchi', kind: 'W', px0: 10, px1: 250, y0: 455, y1: 605, h: 198, style: 0, heli: true });
+  // KITTE (the former Tokyo Central Post Office) and JP Tower behind it: built by kitte() below
+  lm({ name: 'KITTE', kind: 'W', custom: 'kitte', px0: -90, px1: 228, y0: 1340, y1: 1578, h: 31, style: 2,
+    rectsPx: [[-90, 110, 1340, 1578], [110, 150, 1380, 1578], [150, 190, 1420, 1578], [190, 228, 1460, 1578]] });   // the cut corner
+  lm({ name: 'Tokyo Building', kind: 'W', px0: 115, px1: 205, y0: 1625, y1: 1870, h: 164, style: 0, taper: true, heli: true });
+  lm({ name: 'Marunouchi Park Building', kind: 'W', px0: -60, px1: 105, y0: 1700, y1: 2060, h: 157, style: 0, heli: true });
   // Yaesu (east)
-  lm({ name: 'Yaesu courtyard', kind: 'EE', gap: 44, w: 38, y0: 365, y1: 530, h: 62, style: 1 });
-  lm({ name: 'Yaesu tower', kind: 'EE', gap: 88, w: 44, y0: 425, y1: 690, h: 150, style: 0, heli: true });
+  lm({ name: 'Yaesu courtyard', kind: 'W', nopod: true, px0: 690, px1: 810, y0: 392, y1: 545, h: 60, style: 1 });
+  lm({ name: 'Yaesu tower', kind: 'W', nopod: true, px0: 805, px1: 910, y0: 520, y1: 688, h: 150, style: 0, heli: true });
   /* ---- the Yaesu side: one continuous, asymmetric station frontage
      standing right against the viaduct (its footprint follows the
      corridor edge, so it even steps round the Shinkansen buffers):
@@ -2959,9 +2966,9 @@ const cityFar = new THREE.Group();
     return b;
   };
   hugB('Tekko Building', 226, 360, 48, 125, 2, { plant: true });     // its north face on Eitai-dori
-  hugB('Yaesu north station block', 360, 690, 42, 32, 0, { plant: true });
+  hugB('Yaesu north station block', 360, 690, 28, 32, 0, { plant: true });
   const GTN = hugB('GranTokyo North podium', 690, 990, 64, 46, 1);
-  hugB('GranTokyo South Tower', 1520, 1835, 52, 205, 0, { heli: true, sail: true });
+  hugB('GranTokyo South Tower', 1530, 1750, 38, 205, 0, { heli: true, sail: true });
   hugB('Yaesu south', 1835, 2010, 44, 120, 1, { heli: true });
   // the GranRoof: a white pleated membrane on a low glass deck between
   // the two GranTokyo towers, following the curve of the tracks
@@ -2971,7 +2978,7 @@ const cityFar = new THREE.Group();
   // the Yaesu redevelopment site south-east (bare ground and cranes)
   const SITE = { z0: zOf(1550), z1: zOf(2020) }; SITE.x0 = edgeR(SITE.z0, SITE.z1) + 60; SITE.x1 = SITE.x0 + 80;
   const blocked = [
-    ...LM.map(b => [b.x0, b.x1, b.z0, b.z1]),
+    ...LM.flatMap(b => b.rects),
     ...hug.map(b => [b.x0, b.x1, b.z0, b.z1]),
     [GR.x0, GR.x1, GR.z0, GR.z1], [SITE.x0, SITE.x1, SITE.z0, SITE.z1],
     [PLAZA.x0 - 4, -50, PLAZA.z0 - 4, PLAZA.z1 + 4],                   // plaza + brick station
@@ -2981,9 +2988,68 @@ const cityFar = new THREE.Group();
   const hits = (x0, x1, z0, z1, m = 5) => blocked.some(([a, b, c, d]) => x0 < b + m && x1 > a - m && z0 < d + m && z1 > c - m);
 
   const heliPads = [];
+  // extruded footprint from satellite px; walls get world-unit UVs like the other facades
+  const pxPt = ([px, py]) => [frontX(px), zOf(py)];
+  function extrudePx(pts, h, y0 = 0) {
+    const P = pts.map(pxPt), sh = new THREE.Shape();
+    sh.moveTo(P[0][0], -P[0][1]); for (const [x, z] of P.slice(1)) sh.lineTo(x, -z);
+    const g = new THREE.ExtrudeGeometry(sh, { depth: h, bevelEnabled: false, curveSegments: 1 }).rotateX(-Math.PI / 2).translate(0, y0, 0);
+    const uv = g.attributes.uv, cap = g.groups[0];
+    for (let i = cap.start; i < cap.start + cap.count; i++) uv.setXY(i, 0.05, -0.06);
+    g.clearGroups();
+    return g;
+  }
+  function facadeMesh(geos, style, opts, rep = [1 / 14, -1 / 15]) {
+    const mat = cityWindowMaterial(style, opts); setFacadeRepeat(mat, rep[0], rep[1]); cityMats.push(mat);
+    const m = new THREE.Mesh(geos.length > 1 ? BufferGeometryUtils.mergeGeometries(geos.map(g => g.index ? g.toNonIndexed() : g)) : geos[0], mat);
+    m.castShadow = m.receiveShadow = true;
+    const grp = new THREE.Group(); grp.add(m); cityNear.add(grp); return m;
+  }
+  function customBuilding(b) {
+    if (b.custom === 'curved') { facadeMesh([extrudePx(b.poly, b.h)], b.style, { roughness: 0.6, metalness: 0.15 }); return; }
+    if (b.custom === 'kitte') kitte();
+  }
+  /* KITTE: the 1931 post office — five storeys of white tile and a regular
+     window grid, its facade bending round the street corner at the station's
+     south exit — with the roof garden on top and the triangular glass atrium
+     roof between the old wings and JP Tower (200 m), whose north-east corner
+     is cut on the same diagonal. */
+  function kitte() {
+    const old = [[-90, 1340], [110, 1342], [228, 1460], [228, 1522], [-90, 1522]];
+    // five tall storeys: a coarser window grid than the office towers
+    const oldM = facadeMesh([extrudePx(old, 28.5)], 1, { color: 0xf6f4ee, roughness: 0.8, metalness: 0 }, [1 / 24, -1 / 52]);
+    // parapet and the thin white cornice at the top of the old building
+    const cornice = extrudePx(old, 1.2, 28.5);
+    const podium = extrudePx([[-90, 1522], [228, 1522], [228, 1578], [-90, 1578]], 40);
+    const tower = extrudePx([[-90, 1385], [38, 1385], [88, 1435], [88, 1570], [-90, 1570]], 200);
+    facadeMesh([podium], 1, { color: 0xd8d6cf, roughness: 0.75, metalness: 0.05 });
+    const tm = facadeMesh([tower], 0, { roughness: 0.25, metalness: 0.5 });
+    const white = new THREE.MeshStandardMaterial({ color: 0xf7f6f1, roughness: 0.7 });
+    const cm = new THREE.Mesh(cornice, white); cm.castShadow = true; cityNear.add(cm);
+    // triangular atrium roof (glass, a low pyramid) behind the bent facade
+    const tri = [[86, 1398], [86, 1508], [196, 1508]].map(pxPt);
+    const ty = 29.72, apex = [(tri[0][0] + tri[1][0] + tri[2][0]) / 3, ty + 3.2, (tri[0][1] + tri[1][1] + tri[2][1]) / 3];
+    const pos = [];
+    for (let i = 0; i < 3; i++) { const a = tri[i], c = tri[(i + 1) % 3]; pos.push(a[0], ty, a[1], c[0], ty, c[1], ...apex); }
+    const ag = new THREE.BufferGeometry(); ag.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); ag.computeVertexNormals();
+    const glass = new THREE.MeshStandardMaterial({ color: 0x9fb7c4, roughness: 0.15, metalness: 0.6, side: THREE.DoubleSide });
+    const am = new THREE.Mesh(ag, glass); cityNear.add(am);
+    // KITTE Garden: lawn and planting on the roof along the bent corner, looking at the station
+    const lawn = new THREE.MeshStandardMaterial({ color: 0x7aa85a, roughness: 1 });
+    const gpoly = [[112, 1350], [216, 1452], [222, 1460], [222, 1500], [205, 1500], [104, 1398], [104, 1350]];
+    const lg = extrudePx(gpoly, 0.25, 29.7); const lm2 = new THREE.Mesh(lg, lawn); lm2.receiveShadow = true; cityNear.add(lm2);
+    const shrub = new THREE.MeshStandardMaterial({ color: 0x4d7e42, roughness: 0.95 });
+    for (const [px, py] of [[125, 1368], [145, 1390], [165, 1410], [185, 1430], [205, 1452], [214, 1478]]) {
+      const [x, z] = pxPt([px, py]);
+      const t = new THREE.Mesh(new THREE.SphereGeometry(1.4, 8, 6), shrub); t.position.set(x, 31.1, z); t.castShadow = true; cityNear.add(t);
+    }
+    heliPads.push([...(() => { const c = pxPt([0, 1478]); return [c[0], 200.02, c[1]]; })(), 12]);
+    void oldM; void tm;
+  }
   for (const b of LM) {
+    if (b.custom) { customBuilding(b); continue; }
     const w = b.x1 - b.x0, d = b.z1 - b.z0;
-    const pod = b.kind !== 'EE' && b.h > 60 ? 31 : 0;
+    const pod = b.kind !== 'EE' && !b.nopod && b.h > 60 ? 31 : 0;
     const g = makeBuilding((b.x0 + b.x1) / 2, (b.z0 + b.z1) / 2, w, d, b.h, !!b.taper, b.style, !!b.heli, pod);
     cityNear.add(g);
     if (b.heli) heliPads.push([(b.x0 + b.x1) / 2, b.h + 0.02, (b.z0 + b.z1) / 2, pod ? Math.min(w - 10, d - 10) * 0.6 : Math.min(w, d) * (b.taper ? 0.5 : 0.62)]);
@@ -3000,7 +3066,7 @@ const cityFar = new THREE.Group();
   const SOTO = z => 160 - 0.0625 * z;               // Sotobori-dori, tilted like the map
   const NS_W = [[-137, 10], [-213, 14], [-299, 22]];
   const EW_W = [[-720, 12], [-630, 12], [-545, 12], [-455, 14], [-385, 12], [-320, 12], [-263, 22], [-190, 12], [-121, 14],
-    [0, 40], [68, 12], [177, 14], [278, 18], [347, 22], [410, 12], [480, 12], [560, 12], [640, 12], [730, 12]];
+    [0, 40], [98, 12], [193, 14], [278, 18], [347, 22], [410, 12], [480, 12], [560, 12], [640, 12], [730, 12]];
   const NS_E = [[0, 20], [52, 10], [100, 10], [148, 18], [200, 10], [250, 10], [300, 10]];     // offsets from Sotobori-dori
   const EW_E = [[-720, 12], [-620, 12], [-540, 12], [-455, 12], [-390, 12], [-330, 12], [-263, 22], [-205, 10], [-150, 10],
     [-95, 10], [-40, 10], [15, 14], [70, 10], [125, 10], [180, 10], [235, 10], [293, 10], [347, 24], [410, 10], [470, 10],
@@ -3315,7 +3381,7 @@ const cityFar = new THREE.Group();
     const nodes = [], edges = [], key = new Map();
     const node = (x, z) => { const k = x.toFixed(1) + ',' + z.toFixed(1); if (key.has(k)) return key.get(k);
       const n = { x, z, e: [], ph: Math.random() * 40 }; nodes.push(n); key.set(k, n); return n; };
-    const roadBlock = [...LM.map(b => [b.x0, b.x1, b.z0, b.z1]), ...hug.map(b => [b.x0, b.x1, b.z0, b.z1]),
+    const roadBlock = [...LM.flatMap(b => b.rects), ...hug.map(b => [b.x0, b.x1, b.z0, b.z1]),
       [GR.x0, GR.x1, GR.z0, GR.z1], [SITE.x0, SITE.x1, SITE.z0, SITE.z1], [-131, -50, PLAZA.z0 - 3, PLAZA.z1 + 3], [PLAZA.x0 - 130, PLAZA.x0, -9, 9],
       [-143, -131, -92, 64]];               // the station-front street is footway between the two traffic plazas
     const clearRoad = (a, b) => {
@@ -3373,6 +3439,11 @@ const cityFar = new THREE.Group();
       // south of the station it is a wider, four-lane street
       const tsS = z => corridorEdges(z).left - 9;
       for (const z of [136, 165, 200, 235, 270, 305, 330]) { const n = node(tsS(z), z); if (!prev || clearRoad(prev, n)) { if (prev) { link(prev, n, 'ns', 14); edges[edges.length - 1].ts = true; } prev = n; } else break; }
+      // the street in front of KITTE, round its cut corner to the track-side street (as in the photo)
+      if (TRACKSIDE.southStart = key.get(tsS(136).toFixed(1) + ',' + (136).toFixed(1))) {
+        const m = key.get((-137).toFixed(1) + ',' + (98).toFixed(1)), a = node(-100, 98);
+        if (m && clearRoad(m, a) && clearRoad(a, TRACKSIDE.southStart)) { link(m, a, 'ew', 12); link(a, TRACKSIDE.southStart, 'ns', 12); TRACKSIDE.kitte = true; }
+      }
       const j = key.get(NS_W[0][0].toFixed(1) + ',' + (347).toFixed(1));
       if (prev && j) { const m = node(tsS(347), 347); if (clearRoad(prev, m)) { link(prev, m, 'ns', 14); edges[edges.length - 1].ts = true; } if (clearRoad(m, j)) link(m, j, 'ew', 14); }
     }
@@ -3506,7 +3577,7 @@ const cityFar = new THREE.Group();
           v.s += v.v * dt;
           if (v.s >= e.len) {                                                  // pick the next street
             const n = end, opts = n.e.filter(q => q !== e), Z = PZ.find(q => q.mouth === n);
-            if (Z && Z.n < 8) { visit(v, Z); v.s = 0; }                      // turn into the traffic plaza
+            if (Z && Z.n < 8 && (!opts.length || Math.random() < 0.35)) { visit(v, Z); v.s = 0; }   // turn into the traffic plaza
             else if (!opts.length) { v.s = 0; v.fwd = !v.fwd; v.v = 0; v.uhold = 3 + Math.random() * 5; }  // dead end (drop-off): stop, turn round
             else {
               const ne = opts[(Math.random() * opts.length) | 0];
@@ -3688,7 +3759,7 @@ const cityFar = new THREE.Group();
       }
       // plaza: entrances (north / centre / south) ↔ plaza corners, bus stops, street crossings
       const P0 = PLAZA, ents = [[-77, -86], [-77, -6], [-77, 6], [-77, 86], [-77, -40], [-77, 40]];
-      const outs = [[P0.x0 + 2, -14], [P0.x0 + 2, 14], [-100, -97], [-131, -104], [-100, 90], [-142, 76],
+      const outs = [[P0.x0 + 2, -14], [P0.x0 + 2, 14], [-100, -97], [-131, -104], [-118, 86], [-92, 86],
         ...TPLAZAS.flatMap(P => [...P.stops.bus.map(([x, z]) => [x + 3.5, z]), ...P.stops.taxi.map(([x, z]) => [x, z + (z > P.z1 - 1 ? 3.5 : -3.5)])])];
       // never across a traffic plaza's carriageway or the car park
       const avoid = [...plazaRects, [CARPARK.x0, CARPARK.x1, CARPARK.z0, CARPARK.z1]];
